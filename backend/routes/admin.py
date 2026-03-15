@@ -1,6 +1,10 @@
+import re
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from services.auth import require_admin, get_db
 from services.encryption import encrypt_key
+
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -58,6 +62,56 @@ def update_user_status(uid):
         
     db.collection('users').document(uid).update(update_data)
     return jsonify({"message": "User updated successfully"})
+
+@admin_bp.route("/api/admin/preauthorized", methods=["GET"])
+@require_admin
+def get_preauthorized():
+    db = get_db()
+    docs = db.collection('preauthorized_emails').order_by('addedAt', direction='DESCENDING').stream()
+    result = []
+    for doc in docs:
+        d = doc.to_dict()
+        d['id'] = doc.id
+        result.append(d)
+    return jsonify(result)
+
+@admin_bp.route("/api/admin/preauthorized", methods=["POST"])
+@require_admin
+def add_preauthorized():
+    db = get_db()
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    if not email or not _EMAIL_RE.match(email):
+        return jsonify({"error": "Valid email required"}), 400
+
+    shared = bool(data.get('sharedKeyEnabled', True))
+    cap = int(data.get('dailyCap', 20))
+    note = (data.get('note') or '').strip()
+
+    existing = db.collection('preauthorized_emails').where('email', '==', email).limit(1).stream()
+    if any(True for _ in existing):
+        return jsonify({"error": "This email is already pre-authorized"}), 409
+
+    now = datetime.now(timezone.utc).isoformat()
+    doc_ref = db.collection('preauthorized_emails').document()
+    doc_data = {
+        'email': email,
+        'sharedKeyEnabled': shared,
+        'dailyCap': cap,
+        'note': note,
+        'addedAt': now,
+        'addedBy': getattr(request, 'uid', ''),
+    }
+    doc_ref.set(doc_data)
+    doc_data['id'] = doc_ref.id
+    return jsonify(doc_data), 201
+
+@admin_bp.route("/api/admin/preauthorized/<doc_id>", methods=["DELETE"])
+@require_admin
+def delete_preauthorized(doc_id):
+    db = get_db()
+    db.collection('preauthorized_emails').document(doc_id).delete()
+    return jsonify({"success": True})
 
 @admin_bp.route("/api/admin/stats", methods=["GET"])
 @require_admin

@@ -5,7 +5,7 @@ import {
   signOut,
   GoogleAuthProvider
 } from 'firebase/auth'
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, limit, getDocs } from 'firebase/firestore'
 import { auth, db, googleProvider } from '../firebase'
 
 const AuthContext = createContext()
@@ -14,6 +14,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [googleAccessToken, setGoogleAccessToken] = useState(null)
+  const [preauthToast, setPreauthToast] = useState(false)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -31,14 +32,32 @@ export function AuthProvider({ children }) {
         }
 
         if (!userDoc.exists()) {
-          // Initialize new user with default settings
+          // Initialize new user — check pre-authorization first
           userData.role = firebaseUser.uid === import.meta.env.VITE_ADMIN_UID ? 'admin' : 'user'
-          userData.hasSharedAccess = false
-          userData.dailyCap = 5
           userData.usageToday = 0
           userData.totalUsage = 0
           userData.createdAt = serverTimestamp()
-          await setDoc(userDocRef, userData)
+
+          const preauthQ = query(
+            collection(db, 'preauthorized_emails'),
+            where('email', '==', (firebaseUser.email || '').toLowerCase()),
+            limit(1)
+          )
+          const preauthSnap = await getDocs(preauthQ)
+          if (!preauthSnap.empty) {
+            const preauthDoc = preauthSnap.docs[0]
+            const preauth = preauthDoc.data()
+            userData.hasSharedAccess = preauth.sharedKeyEnabled !== false
+            userData.dailyCap = preauth.dailyCap || 20
+            await deleteDoc(preauthDoc.ref)
+            await setDoc(userDocRef, userData)
+            setPreauthToast(true)
+            setTimeout(() => setPreauthToast(false), 5000)
+          } else {
+            userData.hasSharedAccess = false
+            userData.dailyCap = 5
+            await setDoc(userDocRef, userData)
+          }
         } else {
           // Update last login
           const updates = { lastLogin: serverTimestamp() }
@@ -92,6 +111,11 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={value}>
       {!loading && children}
+      {preauthToast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[9999] bg-emerald-600 text-white px-5 py-3 rounded-xl shadow-xl text-sm font-semibold flex items-center gap-2 pointer-events-none">
+          <span>✅</span> Welcome! AI access has been pre-configured for you.
+        </div>
+      )}
     </AuthContext.Provider>
   )
 }

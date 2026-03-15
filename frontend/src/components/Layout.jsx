@@ -5,6 +5,7 @@ import {
   Search, MessageSquare, Tag, Layers, BarChart2, Zap, BookOpen, User, LogOut, Settings, Shield, Home, Calendar
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import CounterOfferCalculator from './CounterOfferCalculator'
 
 const NAV_ITEMS = [
   { to: '/', icon: Home, label: 'home' },
@@ -155,6 +156,8 @@ export default function Layout({ children }) {
       <main className="flex-1 pb-20 sm:pb-0">
         {children}
       </main>
+
+      <CounterOfferCalculator />
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { Calendar as CalendarIcon, Clock, MapPin, Trash2, ExternalLink, Filter, Plus, ChevronRight, Search, MessageCircle, Tag, Target, Navigation, Pencil } from 'lucide-react'
 import { useApi } from '../hooks/useApi'
 import { useAuth } from '../context/AuthContext'
+import { useTranslation } from 'react-i18next'
 import AppointmentModal from '../components/AppointmentModal'
 
 const TYPE_COLORS = {
@@ -11,16 +12,17 @@ const TYPE_COLORS = {
   meeting: 'border-purple-500/30 bg-purple-500/5 text-purple-400',
 }
 
-const TYPE_LABELS = {
-  inspection: '🔍 Inspection',
-  handover: '🤝 Handover',
-  meeting: '👥 Meeting',
-}
-
 export default function AppointmentsPage() {
+  const { t } = useTranslation()
   const api = useApi()
   const location = useLocation()
   const { googleAccessToken } = useAuth()
+
+  const TYPE_LABELS = {
+    inspection: t('appointments.filter_inspection'),
+    handover: t('appointments.filter_handover'),
+    meeting: t('appointments.filter_meeting'),
+  }
   const [appointments, setAppointments] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -47,14 +49,14 @@ export default function AppointmentsPage() {
       const data = await api.getAppointments()
       setAppointments(data)
     } catch (err) {
-      setError('Failed to load appointments')
+      setError(t('appointments.load_error'))
     } finally {
       setLoading(false)
     }
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this appointment? This will also remove it from Google Calendar if synced.')) return
+    if (!window.confirm(t('appointments.delete_confirm'))) return
     
     try {
       const headers = {}
@@ -63,7 +65,7 @@ export default function AppointmentsPage() {
       await api.deleteAppointment(id, headers)
       setAppointments(prev => prev.filter(a => a.id !== id))
     } catch (err) {
-      alert('Failed to delete appointment')
+      alert(t('appointments.delete_error'))
     }
   }
 
@@ -81,11 +83,11 @@ export default function AppointmentsPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <h1 className="section-header mb-0">
           <CalendarIcon className="w-6 h-6 text-blue-400" />
-          <span>Appointments</span>
+          <span>{t('appointments.header')}</span>
           <span className="text-sm font-normal text-slate-500 ml-2">({filtered.length})</span>
         </h1>
         <button onClick={() => setIsModalOpen(true)} className="btn-primary w-full md:w-auto justify-center">
-          <Plus className="w-4 h-4" /> New Event
+          <Plus className="w-4 h-4" /> {t('appointments.new_event')}
         </button>
       </div>
 
@@ -94,21 +96,21 @@ export default function AppointmentsPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
           <input 
             className="input pl-10 py-2"
-            placeholder="Search events or deals..."
+            placeholder={t('appointments.search_placeholder')}
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
         </div>
         <div className="flex gap-2">
-          {['all', 'inspection', 'handover', 'meeting'].map(t => (
+          {['all', 'inspection', 'handover', 'meeting'].map(filterType => (
             <button
-              key={t}
-              onClick={() => setFilter(t)}
+              key={filterType}
+              onClick={() => setFilter(filterType)}
               className={`px-3 py-2 rounded-lg border text-xs font-bold transition-all ${
-                filter === t ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-surface-800 border-slate-700 text-slate-500 hover:border-slate-600'
+                filter === filterType ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-surface-800 border-slate-700 text-slate-500 hover:border-slate-600'
               }`}
             >
-              {t === 'all' ? 'All' : TYPE_LABELS[t]}
+              {filterType === 'all' ? t('appointments.filter_all') : TYPE_LABELS[filterType]}
             </button>
           ))}
         </div>
@@ -117,8 +119,8 @@ export default function AppointmentsPage() {
       {filtered.length === 0 ? (
         <div className="card p-12 text-center">
            <CalendarIcon className="w-12 h-12 text-slate-700 mx-auto mb-4" />
-           <p className="text-slate-400 font-medium">No appointments found</p>
-           <p className="text-xs text-slate-600 mt-1">Schedule your first inspection or meeting to get started.</p>
+           <p className="text-slate-400 font-medium">{t('appointments.empty_title')}</p>
+           <p className="text-xs text-slate-600 mt-1">{t('appointments.empty_desc')}</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -146,19 +148,19 @@ export default function AppointmentsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${TYPE_COLORS[app.type] || TYPE_COLORS['meeting']}`}>
-                        {app.type || 'meeting'}
+                        {TYPE_LABELS[app.type] || TYPE_LABELS['meeting']}
                       </span>
                       {app.google_event_id && (
                         <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold uppercase">
                           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          Synced
+                          {t('appointments.synced')}
                         </span>
                       )}
                     </div>
                     <h3 className="text-base font-bold text-slate-100 mb-1">{app.title}</h3>
                     {app.deal_title && (
                       <div className="flex items-center gap-1 text-xs text-blue-400 font-medium mb-2">
-                        <ChevronRight className="w-3 h-3" /> Deal: {app.deal_title}
+                        <ChevronRight className="w-3 h-3" /> {t('appointments.deal_label')}: {app.deal_title}
                       </div>
                     )}
                     {app.location && (
@@ -184,7 +186,7 @@ export default function AppointmentsPage() {
                       <Link 
                         to={`/pipeline?search=${app.deal_id}`}
                         className="p-2 text-slate-500 hover:text-blue-400 hover:bg-blue-400/10 rounded-lg transition-all"
-                        title="View Deal"
+                        title={t('appointments.view_deal')}
                       >
                         <ExternalLink className="w-4 h-4" />
                       </Link>
@@ -192,14 +194,14 @@ export default function AppointmentsPage() {
                     <button 
                       onClick={() => { setEditingAppointment(app); setIsModalOpen(true); }}
                       className="p-2 text-slate-500 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition-all"
-                      title="Edit Event"
+                      title={t('appointments.edit_title')}
                     >
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button 
                       onClick={() => handleDelete(app.id)}
                       className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all"
-                      title="Delete Event"
+                      title={t('appointments.delete_title')}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>

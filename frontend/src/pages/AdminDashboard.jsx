@@ -1,12 +1,94 @@
+/**
+ * @flipops-map AdminDashboard.jsx
+ *
+ * IMPORTS: L80–L114
+ * CONSTANTS:
+ *   DEFAULT_PLATFORM_PREFS  L116
+ *   PLATFORMS               L117–L122
+ *   PROVIDER_INFO           L124–L139
+ *   DEFAULT_*_PROMPT        L141–L144
+ *
+ * STATE: L150–L195
+ *   userProfile L150        stats L151           users L152
+ *   apiKey L153             sharedKey L154       loading L155
+ *   updating L156           expandedPrompts L157 viewPrompts L158
+ *   search L159             message L160         expandedUser L161
+ *   newLocation L162        locationQuery L163   locationSuggestions L164
+ *   locationSearching L165  activeTab L166       searchTimeout (ref) L167
+ *   platformPrefs L169      platformToast L170
+ *   preauths L172           preauthLoading L173  preauthForm L174
+ *   preauthError L175       preauthAdding L176
+ *   kwVariants L178         kwLoading L179       kwEditingId L180
+ *   kwDraft L181            kwNewChip L182       kwEditChip L183
+ *   kwAddingNew L184        kwNewForm L185       kwNewChipInput L186
+ *   providerStates L188     keyInputs L189       showKey L190
+ *   verifying L191          keyErrors L192       changingKey L193
+ *   searchUsage L194        usageLoading L195
+ *
+ * EFFECTS:
+ *   L197 Mount — calls fetchData()
+ *   L224 platformPrefs — syncs from userProfile.platformPreferences
+ *   L228 providerStates — syncs from userProfile.searchProviders
+ *   L248 variants lazy-load — fetches kwVariants when activeTab='variants'
+ *   L256 preauth lazy-load — fetches preauths when activeTab='preauth'
+ *   L356 searchUsage — fetches on mount; refreshes every 5 min via setInterval
+ *
+ * HANDLERS:
+ *   L201 fetchData              load profile + admin stats + users
+ *   L233 handlePlatformToggle   toggle platform enabled; save via api; show toast
+ *   L264 handleAddPreauth       validate email; call api.addPreauthorized; update list
+ *   L288 handleDeletePreauth    confirm + delete pre-auth doc
+ *   L294 handleKwToggle         toggle keyword variant enabled
+ *   L299 handleKwDelete         delete keyword variant by id
+ *   L304 handleKwEditSave       save keyword variant edit draft
+ *   L311 handleKwCreate         create new keyword variant group
+ *   L320 authFetch              inline fetch helper with Firebase token
+ *   L338 refreshUserProfile     calls api.getMe() → setUserProfile
+ *   L343 fetchSearchUsage       fetches /api/user/search-usage → setSearchUsage
+ *   L362 handleSaveKey          verify + save search provider API key
+ *   L381 handleToggle           toggle provider enabled via PATCH
+ *   L393 handleRemove           confirm + remove provider key
+ *   L404 handleSavePersonalKey  save personal Anthropic API key
+ *   L421 handleDeletePersonalKey  remove personal Anthropic API key
+ *   L436 handleInlineUpdate     inline-update a user field (admin)
+ *   L445 toggleAccess           toggle user hasSharedAccess (admin)
+ *   L457 handleSetSharedKey     set master shared key (admin)
+ *
+ * SECTIONS (JSX):
+ *   - Sidebar nav:                   L506
+ *   - Status message toast:          L547
+ *   - Profile & Security tab:        L561  (Anthropic key, shared access, language)
+ *   - AI Customization tab:          L683  (tone, language, 4 custom prompts)
+ *   - My Locations tab:              L1006
+ *   - System Health tab (admin):     L1150
+ *   - Pre-authorized emails (admin): L1323
+ *   - User Authority Matrix (admin): L1420
+ *   - Search Platforms tab:          L1542
+ *   - Keyword Variants tab:          L1585
+ *   - Search Providers tab:          L1723
+ *   - Infrastructure tab (admin):    L1856
+ *
+ * ANCHORS:
+ *   - Where to add new user-facing section:  L1854 (after providers, before master)
+ *   - Where to add new admin-only section:   L1904 (after master, before </main>)
+ *   - authFetch helper:             L320
+ *   - refreshUserProfile:           L338
+ *   - Usage stats (providers map):  L1744–L1789
+ *   - navItems array:               L487  (add tab id here + matching JSX section below)
+ */
+
 import { useState, useEffect, useRef } from 'react'
 import {
   LayoutDashboard, Users, Activity, ShieldCheck, Key, Save, Search, UserCog,
   TrendingUp, ChevronDown, ChevronUp, BarChart, Trash2, CheckCircle, AlertCircle,
   Settings as SettingsIcon, Shield, MessageSquare, MapPin, Globe, Plus, Trash2 as Trash,
-  Home, Briefcase, Navigation, Calendar, Zap as ZapIcon, Sparkles, History, Bot, MessageCircle
+  Home, Briefcase, Navigation, Calendar, Zap as ZapIcon, Sparkles, History, Bot, MessageCircle,
+  Tag, X, Pencil, Mail
 } from 'lucide-react'
+import { auth } from '../firebase'
 import { useApi } from '../hooks/useApi'
 import { useAuth } from '../context/AuthContext'
+import { useTranslation } from 'react-i18next'
 import { Line } from 'react-chartjs-2'
 import React from 'react'
 import {
@@ -32,6 +114,31 @@ ChartJS.register(
   Filler
 )
 
+const DEFAULT_PLATFORM_PREFS = { wallapop: true, vinted: true, milanuncios: true, ebay_es: true }
+const PLATFORMS = [
+  { key: 'wallapop',    label: 'Wallapop',    emoji: '🟠' },
+  { key: 'vinted',      label: 'Vinted',      emoji: '🟢' },
+  { key: 'milanuncios', label: 'Milanuncios', emoji: '🔵' },
+  { key: 'ebay_es',     label: 'eBay Spain',  emoji: '🔴' },
+]
+
+const PROVIDER_INFO = {
+  scrapingdog: {
+    name: 'Scrapingdog', emoji: '🐕', freeInfo: '200 searches · Never resets',
+    steps: ['Go to scrapingdog.com', 'Sign up free (no credit card)', 'Dashboard → copy your API key'],
+    url: 'https://scrapingdog.com', closed: false,
+  },
+  serpapi: {
+    name: 'SerpAPI', emoji: '🔍', freeInfo: '250 searches/month',
+    steps: ['Go to serpapi.com', 'Click Register', 'Dashboard → copy your API key'],
+    url: 'https://serpapi.com', closed: false,
+  },
+  serper: {
+    name: 'Serper', emoji: '⚡', freeInfo: '2,500 searches/month',
+    steps: [], url: 'https://serper.dev', closed: true,
+  },
+}
+
 const DEFAULT_NEGOTIATION_PROMPT = 'Be professional and friendly. Always propose round prices (ending in 0 or 5). If the deal score is above 85, show extra enthusiasm in the negotiation message. Keep messages short and natural — avoid sounding like a bot.'
 const DEFAULT_LISTING_PROMPT = 'Highlight the best value-for-money aspect. Mention flexibility on price and fast response. Keep it conversational — avoid generic copy-paste listing language.'
 const DEFAULT_BATCH_PROMPT = 'Focus on products with the best resale margin. Be strict about filtering accessories and bundles. Flag any sellers with suspicious behaviour or vague descriptions.'
@@ -39,7 +146,8 @@ const DEFAULT_DISCUSSION_PROMPT = 'Keep replies short and natural — 2-3 senten
 
 export default function AdminDashboard({ pipeline }) {
   const api = useApi()
-  const { isAdmin } = useAuth()
+  const { isAdmin, user } = useAuth()
+  const { t } = useTranslation()
   const [userProfile, setUserProfile] = useState(null)
   const [stats, setStats] = useState(null)
   const [users, setUsers] = useState([])
@@ -58,6 +166,34 @@ export default function AdminDashboard({ pipeline }) {
   const [locationSearching, setLocationSearching] = useState(false)
   const [activeTab, setActiveTab] = useState('profile')
   const searchTimeout = useRef(null)
+
+  const [platformPrefs, setPlatformPrefs] = useState(DEFAULT_PLATFORM_PREFS)
+  const [platformToast, setPlatformToast] = useState('')
+
+  const [preauths, setPreauths] = useState([])
+  const [preauthLoading, setPreauthLoading] = useState(false)
+  const [preauthForm, setPreauthForm] = useState({ email: '', dailyCap: 20, note: '' })
+  const [preauthError, setPreauthError] = useState('')
+  const [preauthAdding, setPreauthAdding] = useState(false)
+
+  const [kwVariants, setKwVariants] = useState([])
+  const [kwLoading, setKwLoading] = useState(false)
+  const [kwEditingId, setKwEditingId] = useState(null)
+  const [kwDraft, setKwDraft] = useState({ trigger: '', variants: [] })
+  const [kwNewChip, setKwNewChip] = useState('')
+  const [kwEditChip, setKwEditChip] = useState({ idx: null, val: '' })
+  const [kwAddingNew, setKwAddingNew] = useState(false)
+  const [kwNewForm, setKwNewForm] = useState({ trigger: '', variants: [] })
+  const [kwNewChipInput, setKwNewChipInput] = useState('')
+
+  const [providerStates, setProviderStates] = useState({})
+  const [keyInputs, setKeyInputs] = useState({})
+  const [showKey, setShowKey] = useState({})
+  const [verifying, setVerifying] = useState({})
+  const [keyErrors, setKeyErrors] = useState({})
+  const [changingKey, setChangingKey] = useState({})
+  const [searchUsage, setSearchUsage] = useState({})
+  const [usageLoading, setUsageLoading] = useState(false)
 
   useEffect(() => {
     fetchData()
@@ -83,6 +219,186 @@ export default function AdminDashboard({ pipeline }) {
       setMessage({ type: 'error', text: 'Error loading management data.' })
     } finally {
       setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (userProfile?.platformPreferences) setPlatformPrefs(userProfile.platformPreferences)
+  }, [userProfile])
+
+  useEffect(() => {
+    if (!userProfile?.searchProviders) return
+    setProviderStates(userProfile.searchProviders)
+  }, [userProfile])
+
+  const handlePlatformToggle = async (key) => {
+    const newVal = !platformPrefs[key]
+    setPlatformPrefs(prev => ({ ...prev, [key]: newVal }))
+    const label = PLATFORMS.find(p => p.key === key)?.label || key
+    setPlatformToast(`${label} ${newVal ? 'enabled' : 'disabled'}`)
+    setTimeout(() => setPlatformToast(''), 3000)
+    try {
+      await api.updatePlatformPreference(key, newVal)
+    } catch {
+      setPlatformPrefs(prev => ({ ...prev, [key]: !newVal }))
+      setPlatformToast('Failed to save')
+      setTimeout(() => setPlatformToast(''), 3000)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab !== 'variants' || kwVariants.length > 0 || kwLoading) return
+    setKwLoading(true)
+    api.getKeywordVariants()
+      .then(data => { setKwVariants(data); setKwLoading(false) })
+      .catch(() => setKwLoading(false))
+  }, [activeTab])
+
+  useEffect(() => {
+    if (activeTab !== 'preauth' || preauths.length > 0 || preauthLoading) return
+    setPreauthLoading(true)
+    api.getPreauthorized()
+      .then(data => { setPreauths(data); setPreauthLoading(false) })
+      .catch(() => setPreauthLoading(false))
+  }, [activeTab])
+
+  const handleAddPreauth = async (e) => {
+    e.preventDefault()
+    setPreauthError('')
+    const email = preauthForm.email.trim().toLowerCase()
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      setPreauthError('Valid email required')
+      return
+    }
+    if (preauths.some(p => p.email === email)) {
+      setPreauthError('This email is already pre-authorized')
+      return
+    }
+    setPreauthAdding(true)
+    try {
+      const created = await api.addPreauthorized({ email, dailyCap: Number(preauthForm.dailyCap) || 20, note: preauthForm.note, sharedKeyEnabled: true })
+      setPreauths(prev => [created, ...prev])
+      setPreauthForm({ email: '', dailyCap: 20, note: '' })
+    } catch (err) {
+      setPreauthError(err.message || 'Failed to add')
+    } finally {
+      setPreauthAdding(false)
+    }
+  }
+
+  const handleDeletePreauth = async (p) => {
+    if (!window.confirm(`Remove pre-authorization for ${p.email}?`)) return
+    await api.deletePreauthorized(p.id)
+    setPreauths(prev => prev.filter(x => x.id !== p.id))
+  }
+
+  const handleKwToggle = async (v) => {
+    const updated = await api.updateKeywordVariant(v.id, { enabled: !v.enabled })
+    setKwVariants(prev => prev.map(x => x.id === v.id ? updated : x))
+  }
+
+  const handleKwDelete = async (id) => {
+    await api.deleteKeywordVariant(id)
+    setKwVariants(prev => prev.filter(x => x.id !== id))
+  }
+
+  const handleKwEditSave = async () => {
+    const updated = await api.updateKeywordVariant(kwEditingId, kwDraft)
+    setKwVariants(prev => prev.map(x => x.id === kwEditingId ? updated : x))
+    setKwEditingId(null)
+    setKwNewChip('')
+  }
+
+  const handleKwCreate = async () => {
+    if (!kwNewForm.trigger.trim() || kwNewForm.variants.length === 0) return
+    const created = await api.createKeywordVariant({ ...kwNewForm, source: 'user' })
+    setKwVariants(prev => [...prev, created])
+    setKwAddingNew(false)
+    setKwNewForm({ trigger: '', variants: [] })
+    setKwNewChipInput('')
+  }
+
+  const authFetch = async (path, options = {}) => {
+    const token = await auth.currentUser.getIdToken()
+    const base = import.meta.env.VITE_API_URL || ''
+    const res = await fetch(`${base}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw err
+    }
+    return res.json()
+  }
+
+  const refreshUserProfile = async () => {
+    const meData = await api.getMe()
+    setUserProfile(meData)
+  }
+
+  const fetchSearchUsage = async () => {
+    if (!user) return
+    setUsageLoading(true)
+    try {
+      const data = await authFetch('/api/user/search-usage')
+      setSearchUsage(data.providers || {})
+    } catch {
+      // silent
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchSearchUsage()
+    const id = setInterval(fetchSearchUsage, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line
+
+  const handleSaveKey = (provider) => async () => {
+    setVerifying(p => ({ ...p, [provider]: true }))
+    setKeyErrors(p => ({ ...p, [provider]: '' }))
+    try {
+      await authFetch('/api/user/search-key', {
+        method: 'POST',
+        body: JSON.stringify({ provider, apiKey: keyInputs[provider] }),
+      })
+      setKeyInputs(p => ({ ...p, [provider]: '' }))
+      setChangingKey(p => ({ ...p, [provider]: false }))
+      await refreshUserProfile()
+      fetchSearchUsage()
+    } catch (err) {
+      setKeyErrors(p => ({ ...p, [provider]: err.message || t('settings.searchProviders.keyInvalid') }))
+    } finally {
+      setVerifying(p => ({ ...p, [provider]: false }))
+    }
+  }
+
+  const handleToggle = async (provider, enabled) => {
+    setProviderStates(p => ({ ...p, [provider]: { ...p[provider], enabled } }))
+    try {
+      await authFetch(`/api/user/search-key/${provider}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      })
+    } catch {
+      setProviderStates(p => ({ ...p, [provider]: { ...p[provider], enabled: !enabled } }))
+    }
+  }
+
+  const handleRemove = async (provider) => {
+    if (!window.confirm(t('settings.searchProviders.confirmRemove', { provider: PROVIDER_INFO[provider].name }))) return
+    try {
+      await authFetch(`/api/user/search-key/${provider}`, { method: 'DELETE' })
+      await refreshUserProfile()
+      fetchSearchUsage()
+    } catch (err) {
+      console.error('Remove key failed', err)
     }
   }
 
@@ -173,8 +489,12 @@ export default function AdminDashboard({ pipeline }) {
     { id: 'profile', label: 'Profile & Security', icon: Key },
     { id: 'locations', label: 'My Locations', icon: MapPin },
     { id: 'ai', label: 'AI Customization', icon: Sparkles },
+    { id: 'variants', label: 'Keyword Variants', icon: Tag },
+    { id: 'platforms', label: 'Search Platforms', icon: Globe },
+    { id: 'providers', label: 'Search Providers', icon: Search },
     ...(isAdmin ? [
       { id: 'stats', label: 'System Health', icon: Activity },
+      { id: 'preauth', label: 'Pre-authorized', icon: Mail },
       { id: 'users', label: 'User Controls', icon: UserCog },
       { id: 'master', label: 'Infrastructure', icon: ShieldCheck }
     ] : [])
@@ -1001,6 +1321,103 @@ Return ONLY valid JSON:
       )}
 
 
+      {activeTab === 'preauth' && isAdmin && (() => {
+        const relTime = (iso) => {
+          if (!iso) return '—'
+          const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+          if (m < 60) return `${m}m ago`
+          const h = Math.floor(m / 60)
+          if (h < 24) return `${h}h ago`
+          return `${Math.floor(h / 24)}d ago`
+        }
+        return (
+          <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+            <h3 className="text-xl font-black text-slate-100 flex items-center gap-3">
+              <Mail className="w-6 h-6 text-blue-400" />
+              Pre-authorized emails
+            </h3>
+
+            <div className="card overflow-hidden">
+              {preauthLoading ? (
+                <div className="p-8 text-center text-slate-500 text-sm">Loading…</div>
+              ) : preauths.length === 0 ? (
+                <div className="p-8 text-center text-slate-600 text-sm italic">No pre-authorized emails yet.</div>
+              ) : (
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      {['Email', 'Cap', 'Note', 'Added', ''].map(h => (
+                        <th key={h} className="py-3 px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preauths.map(p => (
+                      <tr key={p.id} className="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors">
+                        <td className="py-3 px-4 text-sm text-slate-200">{p.email}</td>
+                        <td className="py-3 px-4 text-sm text-blue-400 font-bold">{p.dailyCap}</td>
+                        <td className="py-3 px-4 text-sm text-slate-500">{p.note || '—'}</td>
+                        <td className="py-3 px-4 text-xs text-slate-500">{relTime(p.addedAt)}</td>
+                        <td className="py-3 px-4">
+                          <button
+                            onClick={() => handleDeletePreauth(p)}
+                            className="p-1.5 text-red-500 hover:bg-red-500/10 rounded transition-colors"
+                            title="Remove"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="card p-5">
+              <h4 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-4">Add pre-authorization</h4>
+              <form onSubmit={handleAddPreauth} className="flex flex-wrap items-end gap-3">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label">Email</label>
+                  <input
+                    className="input"
+                    type="email"
+                    placeholder="friend@gmail.com"
+                    value={preauthForm.email}
+                    onChange={e => setPreauthForm(f => ({ ...f, email: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="w-24">
+                  <label className="label">Daily cap</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min="1"
+                    max="200"
+                    value={preauthForm.dailyCap}
+                    onChange={e => setPreauthForm(f => ({ ...f, dailyCap: e.target.value }))}
+                  />
+                </div>
+                <div className="flex-1 min-w-[150px]">
+                  <label className="label">Note (optional)</label>
+                  <input
+                    className="input"
+                    placeholder="John BCN"
+                    value={preauthForm.note}
+                    onChange={e => setPreauthForm(f => ({ ...f, note: e.target.value }))}
+                  />
+                </div>
+                <button type="submit" className="btn-primary shrink-0" disabled={preauthAdding}>
+                  {preauthAdding ? 'Adding…' : 'Pre-authorize'}
+                </button>
+              </form>
+              {preauthError && <p className="mt-2 text-xs text-red-400">{preauthError}</p>}
+            </div>
+          </div>
+        )
+      })()}
+
       {activeTab === 'users' && isAdmin && (
         <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
           <div className="flex items-center justify-between">
@@ -1121,6 +1538,320 @@ Return ONLY valid JSON:
                </div>
               </div>
             </div>
+      )}
+
+      {activeTab === 'platforms' && (
+        <div className="space-y-4 animate-in slide-in-from-right-4 duration-300">
+          <div className="mb-6">
+            <h2 className="text-lg font-black text-slate-100">Search Platforms</h2>
+            <p className="text-sm text-slate-400 mt-1">Choose which platforms FlipOps searches by default in Discovery</p>
+          </div>
+
+          {platformToast && (
+            <div className="px-4 py-3 rounded-xl bg-slate-800 border border-slate-700 text-sm text-slate-200 animate-fade-in">
+              {platformToast}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {PLATFORMS.map(p => {
+              const enabled = platformPrefs[p.key] !== false
+              return (
+                <div key={p.key} className="card p-5 border-slate-700/30 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl">{p.emoji}</span>
+                    <div>
+                      <div className="font-bold text-slate-100 text-sm flex items-center gap-2">
+                        {p.label}
+                        {p.note && <span className="text-[9px] font-black uppercase tracking-widest text-slate-600 bg-slate-800 px-2 py-0.5 rounded">{p.note}</span>}
+                      </div>
+                      <div className={`text-[10px] font-black uppercase tracking-widest mt-0.5 ${enabled ? 'text-emerald-500' : 'text-slate-600'}`}>
+                        {enabled ? 'Active' : 'Disabled'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handlePlatformToggle(p.key)}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-blue-500' : 'bg-slate-700'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'variants' && (
+        <div className="space-y-4 animate-in slide-in-from-right-4 duration-300">
+          <div className="mb-6">
+            <h2 className="text-lg font-black text-slate-100">Search Keyword Variants</h2>
+            <p className="text-sm text-slate-400 mt-1">Define what FlipOps searches when you type a broad keyword in Discovery</p>
+          </div>
+
+          {kwLoading ? (
+            <div className="flex justify-center py-12"><span className="spinner w-6 h-6 border-2 border-slate-700 border-t-blue-500" /></div>
+          ) : (
+            <>
+              {kwVariants.map(v => (
+                <div key={v.id} className="card p-5 border-slate-700/30">
+                  {kwEditingId === v.id ? (
+                    <div className="space-y-4">
+                      <input
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                        value={kwDraft.trigger}
+                        onChange={e => setKwDraft(prev => ({ ...prev, trigger: e.target.value }))}
+                        placeholder="Trigger keyword"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        {kwDraft.variants.map((chip, i) => (
+                          kwEditChip.idx === i ? (
+                            <input key={i} autoFocus
+                              className="bg-slate-700 border border-blue-500 rounded-full px-3 py-1 text-xs text-slate-100 focus:outline-none w-32"
+                              value={kwEditChip.val}
+                              onChange={e => setKwEditChip(prev => ({ ...prev, val: e.target.value }))}
+                              onBlur={() => {
+                                if (kwEditChip.val.trim()) {
+                                  const next = [...kwDraft.variants]; next[i] = kwEditChip.val.trim()
+                                  setKwDraft(prev => ({ ...prev, variants: next }))
+                                }
+                                setKwEditChip({ idx: null, val: '' })
+                              }}
+                              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setKwEditChip({ idx: null, val: '' }) }}
+                            />
+                          ) : (
+                            <span key={i} onClick={() => setKwEditChip({ idx: i, val: chip })}
+                              className="flex items-center gap-1 bg-slate-700 text-slate-200 text-xs rounded-full px-3 py-1 cursor-pointer hover:bg-slate-600">
+                              {chip}
+                              <button onClick={e => { e.stopPropagation(); setKwDraft(prev => ({ ...prev, variants: prev.variants.filter((_, j) => j !== i) })) }}
+                                className="text-slate-500 hover:text-red-400 ml-0.5">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          )
+                        ))}
+                        <input
+                          className="bg-slate-800 border border-dashed border-slate-600 rounded-full px-3 py-1 text-xs text-slate-400 focus:outline-none focus:border-blue-500 w-28"
+                          placeholder="+ add chip"
+                          value={kwNewChip}
+                          onChange={e => setKwNewChip(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter' && kwNewChip.trim()) { setKwDraft(prev => ({ ...prev, variants: [...prev.variants, kwNewChip.trim()] })); setKwNewChip('') } }}
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={handleKwEditSave} className="btn-primary text-xs px-4 py-2">Save</button>
+                        <button onClick={() => setKwEditingId(null)} className="btn-secondary text-xs px-4 py-2">Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="font-black text-slate-100">{v.trigger}</span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => handleKwToggle(v)}
+                            className={`relative w-10 h-5 rounded-full transition-colors ${v.enabled ? 'bg-blue-500' : 'bg-slate-700'}`}>
+                            <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${v.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                          </button>
+                          <button onClick={() => { setKwEditingId(v.id); setKwDraft({ trigger: v.trigger, variants: [...v.variants] }); setKwNewChip('') }}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => handleKwDelete(v.id)}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {v.variants.map((chip, i) => (
+                          <span key={i} className="bg-slate-800 text-slate-400 text-xs rounded-full px-3 py-1 border border-slate-700/50">{chip}</span>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-3 text-[10px] text-slate-600 font-bold uppercase tracking-widest">
+                        <span className={`px-2 py-0.5 rounded ${v.source === 'ai' ? 'bg-purple-500/10 text-purple-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                          {v.source === 'ai' ? 'AI' : 'User'}
+                        </span>
+                        {v.lastEditedAt && <span>Edited {new Date(v.lastEditedAt).toLocaleDateString()}</span>}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+
+              {kwAddingNew ? (
+                <div className="card p-5 border-blue-500/20 space-y-4">
+                  <input
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                    placeholder="Trigger keyword (e.g. 'Consola')"
+                    value={kwNewForm.trigger}
+                    onChange={e => setKwNewForm(prev => ({ ...prev, trigger: e.target.value }))}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    {kwNewForm.variants.map((chip, i) => (
+                      <span key={i} className="flex items-center gap-1 bg-slate-700 text-slate-200 text-xs rounded-full px-3 py-1">
+                        {chip}
+                        <button onClick={() => setKwNewForm(prev => ({ ...prev, variants: prev.variants.filter((_, j) => j !== i) }))}
+                          className="text-slate-500 hover:text-red-400"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                    <input
+                      className="bg-slate-800 border border-dashed border-slate-600 rounded-full px-3 py-1 text-xs text-slate-400 focus:outline-none focus:border-blue-500 w-28"
+                      placeholder="+ add chip"
+                      value={kwNewChipInput}
+                      onChange={e => setKwNewChipInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && kwNewChipInput.trim()) { setKwNewForm(prev => ({ ...prev, variants: [...prev.variants, kwNewChipInput.trim()] })); setKwNewChipInput('') } }}
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={handleKwCreate} disabled={!kwNewForm.trigger.trim() || kwNewForm.variants.length === 0}
+                      className="btn-primary text-xs px-4 py-2 disabled:opacity-50">Save</button>
+                    <button onClick={() => { setKwAddingNew(false); setKwNewForm({ trigger: '', variants: [] }); setKwNewChipInput('') }}
+                      className="btn-secondary text-xs px-4 py-2">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setKwAddingNew(true)}
+                  className="w-full py-4 rounded-2xl border border-dashed border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300 transition-all text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2">
+                  <Plus className="w-4 h-4" /> Add keyword group
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'providers' && (
+        <div className="space-y-4 animate-in slide-in-from-right-4 duration-300">
+          <div className="mb-4">
+            <h2 className="text-lg font-black text-slate-100">{t('settings.searchProviders.title')}</h2>
+            <p className="text-sm text-slate-400 mt-1">{t('settings.searchProviders.subtitle')}</p>
+          </div>
+
+          <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold mb-2 ${
+            userProfile?.usingPersonalSearch
+              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+              : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+          }`}>
+            {userProfile?.usingPersonalSearch
+              ? <>🟢 {t('settings.searchProviders.usingPersonal')} {userProfile.activeSearchProviders?.join(', ')}</>
+              : <>🟡 {t('settings.searchProviders.usingShared')}</>}
+          </div>
+
+          <div className="space-y-4">
+            {Object.entries(PROVIDER_INFO).map(([p, prov]) => {
+              const state = providerStates[p] || {}
+              const hasKey = state.hasKey && !changingKey[p]
+              const u = searchUsage[p] || {}
+              const pct = u.freeSearches > 0 ? Math.round((u.searchesRemaining / u.freeSearches) * 100) : 0
+              const barColor = pct > 30 ? 'bg-green-500' : pct > 10 ? 'bg-yellow-500' : 'bg-red-500'
+              return (
+                <div key={p} className="card p-5 border-slate-700/30">
+                  {hasKey ? (
+                    <>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">{prov.emoji}</span>
+                          <span className="font-bold text-slate-100 text-sm">{prov.name}</span>
+                        </div>
+                        <button
+                          onClick={() => handleToggle(p, !state.enabled)}
+                          className={`relative w-10 h-5 rounded-full transition-colors ${state.enabled ? 'bg-blue-500' : 'bg-slate-700'}`}
+                        >
+                          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${state.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+                      <div className="space-y-1 mb-4">
+                        <div className="text-xs text-slate-400">Key: <span className="font-mono">••••••••••</span></div>
+                        {state.addedAt && <div className="text-xs text-slate-500">{t('settings.searchProviders.added')}: {new Date(state.addedAt).toLocaleDateString()}</div>}
+                        <div className="text-xs text-slate-500">{t('settings.searchProviders.lastUsed')}: {state.lastUsedAt ? new Date(state.lastUsedAt).toLocaleDateString() : t('settings.searchProviders.never')}</div>
+                      </div>
+                      {u.freeSearches > 0 && (
+                        <div className="mb-4 p-3 bg-slate-800/50 rounded-lg space-y-2">
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>{t('settings.searchProviders.remaining', { count: u.searchesRemaining ?? '…' })}</span>
+                            <span className="text-slate-500">{u.freeSearches} {t('settings.searchProviders.total')}</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          {u.nextResetDate && (
+                            <div className="text-[10px] text-slate-500">{t('settings.searchProviders.resetsOn')}: {new Date(u.nextResetDate).toLocaleDateString()}</div>
+                          )}
+                          {!u.nextResetDate && (
+                            <div className="text-[10px] text-slate-500">{t('settings.searchProviders.neverResets')}</div>
+                          )}
+                          {u.lowCredits && (
+                            <div className="text-[10px] text-red-400 flex items-center gap-1">
+                              <span>⚠️</span>
+                              <span>{t('settings.searchProviders.lowCredits')} — <button className="underline" onClick={() => window.open(prov.url, '_blank', 'noopener')}>{t('settings.searchProviders.topUp')}</button></span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <button className="btn btn-ghost text-xs" onClick={() => setChangingKey(prev => ({ ...prev, [p]: true }))}>
+                          {t('settings.searchProviders.changeKey')}
+                        </button>
+                        <button className="btn btn-danger text-xs" onClick={() => handleRemove(p)}>
+                          {t('settings.searchProviders.removeKey')}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-xl">{prov.emoji}</span>
+                        <span className="font-bold text-slate-100 text-sm">{prov.name}</span>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-800 px-2 py-0.5 rounded">{prov.freeInfo}</span>
+                      </div>
+                      {prov.closed ? (
+                        <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-3">
+                          {t('settings.searchProviders.registrationClosed')}
+                        </div>
+                      ) : (
+                        <>
+                          <ol className="text-xs text-slate-400 space-y-1 mb-3 list-decimal list-inside">
+                            {prov.steps.map((s, i) => <li key={i}>{s}</li>)}
+                          </ol>
+                          <button className="btn btn-ghost text-xs mb-3" onClick={() => window.open(prov.url, '_blank', 'noopener')}>
+                            {t('settings.searchProviders.openProvider', { name: prov.name })}
+                          </button>
+                        </>
+                      )}
+                      <div className="flex gap-2 mt-1">
+                        <input
+                          type={showKey[p] ? 'text' : 'password'}
+                          className="input flex-1 text-sm"
+                          placeholder="Paste your API key"
+                          value={keyInputs[p] || ''}
+                          onChange={e => setKeyInputs(prev => ({ ...prev, [p]: e.target.value }))}
+                        />
+                        <button className="btn btn-ghost text-xs px-3" onClick={() => setShowKey(prev => ({ ...prev, [p]: !prev[p] }))}>
+                          {showKey[p] ? t('settings.searchProviders.hideKey') : t('settings.searchProviders.showKey')}
+                        </button>
+                      </div>
+                      {keyErrors[p] && <p className="text-red-500 text-xs mt-1">{keyErrors[p]}</p>}
+                      <button
+                        className="btn-primary text-xs mt-3 w-full justify-center py-2"
+                        disabled={verifying[p] || !keyInputs[p]?.length}
+                        onClick={handleSaveKey(p)}
+                      >
+                        {verifying[p] ? <span className="spinner w-3 h-3 mr-1" /> : null}
+                        {verifying[p] ? 'Verifying…' : t('settings.searchProviders.saveAndVerify')}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm text-slate-500">{t('settings.searchProviders.howItWorks')}</summary>
+            <p className="text-sm mt-2 text-slate-400">{t('settings.searchProviders.howItWorksBody')}</p>
+          </details>
+        </div>
       )}
 
       {activeTab === 'master' && isAdmin && (

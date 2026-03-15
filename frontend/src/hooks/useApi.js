@@ -83,9 +83,9 @@ export function useApi() {
       body: JSON.stringify(data)
     }),
     
-    discover: (keywords, location, page = 1) => apiFetch('/api/discovery', {
+    discover: (keywords, location, page = 1, platforms = ['wallapop']) => apiFetch('/api/discovery', {
       method: 'POST',
-      body: JSON.stringify({ keywords, location, page })
+      body: JSON.stringify({ keywords, location, page, platforms })
     }),
     batchAnalyze: (items, keywords) => apiFetch('/api/batch-analyze', {
       method: 'POST',
@@ -93,6 +93,9 @@ export function useApi() {
     }),
     
     // Admin routes
+    getPreauthorized: () => apiFetch('/api/admin/preauthorized'),
+    addPreauthorized: (data) => apiFetch('/api/admin/preauthorized', { method: 'POST', body: JSON.stringify(data) }),
+    deletePreauthorized: (id) => apiFetch(`/api/admin/preauthorized/${id}`, { method: 'DELETE' }),
     getAdminStats: () => apiFetch('/api/admin/stats'),
     getAdminUsers: () => apiFetch('/api/admin/users'),
     updateUser: (uid, data) => apiFetch(`/api/admin/users/${uid}`, {
@@ -104,6 +107,16 @@ export function useApi() {
       body: JSON.stringify({ api_key })
     }),
     
+    updatePlatformPreference: (platform, enabled) => apiFetch('/api/user/platform-preferences', {
+      method: 'PATCH',
+      body: JSON.stringify({ platform, enabled })
+    }),
+
+    getKeywordVariants: () => apiFetch('/api/user/keyword-variants'),
+    createKeywordVariant: (data) => apiFetch('/api/user/keyword-variants', { method: 'POST', body: JSON.stringify(data) }),
+    updateKeywordVariant: (id, data) => apiFetch(`/api/user/keyword-variants/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    deleteKeywordVariant: (id) => apiFetch(`/api/user/keyword-variants/${id}`, { method: 'DELETE' }),
+
     geocode: (q) => apiFetch(`/api/geocoder?q=${encodeURIComponent(q)}`),
 
     generateDiscussion: (data) => apiFetch('/api/discussion/generate', {

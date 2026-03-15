@@ -1,3 +1,115 @@
+/**
+ * @flipops-map DiscoveryView.jsx
+ *
+ * IMPORTS:  L60–L71
+ * CONSTANTS: none
+ *
+ * STATE: L79–L109
+ *   keywords L79       location L80       loading L81        analyzing L82
+ *   listings L83       discarded L84      filteredOut L85
+ *   error L86          success L87        addedIds L88       expandedTextIds L89
+ *   isDiscardedExpanded L90   page L92    hasMore L93
+ *   recentSearches L95   savedSearches L96
+ *   platformPrefs L98   platformErrors L99   platformCounts L100
+ *   searchSource L101   activeProviders L102
+ *   providerStatus L103  lastScanCounts L104  lastScanTotal L105
+ *   usageSummary L106   bannerDismissed L107
+ *   userVariants L105   activeVariantLabel L106
+ *   sessionChips L107   chipsEdited L108    chipInput L109
+ *
+ * EFFECTS:
+ *   L121 Mount — fetches getMe + getKeywordVariants; handles
+ *         locationRouter.state: restoredState (back-nav) | preloadedVariants
+ *         (Find-similar from SearchView; sets keywords/chips/label, triggers
+ *         handleScan with overrideChips after 300ms) | sessionStorage restore
+ *   L165 Persistence — saves listings/discarded/page/addedIds to
+ *         sessionStorage (flipops_discovery_state) on change
+ *
+ * HANDLERS:
+ *   L111 restoreState        bulk-set results+pagination state from snapshot
+ *   L179 toggleText          toggle expanded AI reason text for an item
+ *   L188 handleScan          main search; overrideChips (4th param) bypasses variant resolution
+ *   L300 handleLoadMore      append next page; merge platformCounts
+ *   L363 handleBatchAnalyze  AI batch score; moves score<50 to discarded; sorts by score
+ *   L404 handleAddToPipeline add item to pipeline via pipeline.addDeal(); mark addedIds
+ *   L432 handleMoveToMain    rescue item from discarded back into listings
+ *   L447 handleAnalyzeItem   navigate /search with autoUrl + discoveryState snapshot
+ *   L464 toggleSaveSearch    toggle save/unsave keyword+location in savedSearches
+ *
+ * JSX:
+ *   Header:                L481
+ *   Search card (opens):   L492   closes L676
+ *   Keyword/variant chips: L493   (conditional: activeVariantLabel !== null)
+ *   Platform chips:        L535
+ *   Search bar (form):     L569   closes L613
+ *   Saved/recent pills:    L616
+ *   Error state:           L666   (conditional: error string non-empty)
+ *   Analyzing banner:      L679   (conditional: analyzing === true)
+ *   Provider status bar:   L679   (conditional: providerStatus !== null)
+ *   Source badge:          L720   (conditional: !loading && listings.length > 0 && searchSource)
+ *   Low credit banner:     L737   (conditional: usageSummary.anyLowCredits && !bannerDismissed)
+ *   Results area:          L747   (conditional: listings.length > 0)
+ *   Empty state:           L1113  (else: !loading && !analyzing)
+ *
+ * ANCHORS:
+ *   Above search card:      L480  (after header </div>, before <div.card.p-6.mb-8>)
+ *   Below search form:      L614  (after </form>, before saved/recent searches)
+ *   Where results stored:   L286  setListings / L288 setDiscarded (in handleScan try block)
+ *   Where search triggered: L188  handleScan def / L243 api.discover() call
+ *   Router state read:      L139  locationRouter.state check in mount effect
+ *
+ * LISTS (all .map() render calls):
+ *   Listings desktop table → key={item.url}
+ *     (fixed from item_id — URL is reliable)
+ *   Listings mobile cards → key={item.url}
+ *   Discarded table → key={item.url}
+ *   red_flags inside card → key={flag}
+ *     (flag string value, not index)
+ *
+ * DEDUP BLOCKS:
+ *   handleScan — available items:
+ *     URL-based Set, normalized:
+ *     toLowerCase().replace(/\/$/).split('?')[0]
+ *   handleScan — discarded items:
+ *     URL-based, excludes available URLs too
+ *   handleLoadMore — new items:
+ *     URL-based against existing state URLs
+ *
+ * GOTCHAS:
+ *   ⚠️ item_id is empty for OG meta scraped
+ *      results — never use as dedup key
+ *   ⚠️ URL normalization is critical:
+ *      toLowerCase + strip trailing slash
+ *      + strip query params
+ *   ⚠️ Platform counts come from API response
+ *      not recalculated on frontend
+ *   ⚠️ source + active_providers set from
+ *      API response — do not derive locally
+ *   ⚠️ preloadedVariants from Router state
+ *      auto-triggers handleScan on mount
+ *      with 300ms delay
+ *   ⚠️ Discovery state persisted to
+ *      sessionStorage — survives navigation
+ *   ⚠️ Facebook excluded from platforms
+ *      explicitly in handleScan regardless
+ *      of Firestore platformPreferences
+ *
+ * ARCHITECTURE:
+ *   handleScan():
+ *     resolve keyword variants
+ *     build enabledPlatforms (exclude facebook)
+ *     call discover API
+ *     split results → available / discarded
+ *     deduplicate both by URL
+ *     setListings + setDiscarded
+ *     trigger handleBatchAnalyze
+ *   handleLoadMore():
+ *     fetch next page
+ *     merge platform_counts into state
+ *     deduplicate new items vs existing URLs
+ *     trigger handleBatchAnalyze on new items
+ */
+
 import React, { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
@@ -8,6 +120,9 @@ import {
 } from 'lucide-react'
 import { useApi } from '../hooks/useApi'
 import { useTranslation } from 'react-i18next'
+import { expandKeywords } from '../utils/expandKeywords'
+import PlatformBadge from '../components/PlatformBadge'
+import ProviderStatusBar from '../components/ProviderStatusBar'
 
 export default function DiscoveryView({ pipeline }) {
   const api = useApi()
@@ -34,6 +149,22 @@ export default function DiscoveryView({ pipeline }) {
   const [recentSearches, setRecentSearches] = useState([])
   const [savedSearches, setSavedSearches] = useState([])
 
+  const [platformPrefs, setPlatformPrefs] = useState({ wallapop: true, vinted: true, milanuncios: true, ebay_es: true })
+  const [platformErrors, setPlatformErrors] = useState([])
+  const [platformCounts, setPlatformCounts] = useState({})
+  const [searchSource, setSearchSource] = useState(null)
+  const [activeProviders, setActiveProviders] = useState([])
+  const [providerStatus, setProviderStatus] = useState(null)
+  const [lastScanCounts, setLastScanCounts] = useState({})
+  const [lastScanTotal, setLastScanTotal] = useState(0)
+  const [usageSummary, setUsageSummary] = useState(null)
+  const [bannerDismissed, setBannerDismissed] = useState(() => sessionStorage.getItem('flipops_usage_banner_dismissed') === '1')
+  const [userVariants, setUserVariants] = useState([])
+  const [activeVariantLabel, setActiveVariantLabel] = useState(null)
+  const [sessionChips, setSessionChips] = useState([])
+  const [chipsEdited, setChipsEdited] = useState(false)
+  const [chipInput, setChipInput] = useState('')
+
   const restoreState = React.useCallback((state) => {
     setKeywords(state.keywords || '')
     setLocation(state.location || '')
@@ -48,10 +179,13 @@ export default function DiscoveryView({ pipeline }) {
     let mounted = true
     const fetchUserSearches = async () => {
       try {
-        const user = await api.getMe()
+        const [user, variants] = await Promise.all([api.getMe(), api.getKeywordVariants()])
         if (!mounted) return
         if (user.recent_searches) setRecentSearches(user.recent_searches)
         if (user.saved_searches) setSavedSearches(user.saved_searches)
+        if (user.platformPreferences) setPlatformPrefs(user.platformPreferences)
+        if (user.searchUsageSummary) setUsageSummary(user.searchUsageSummary)
+        setUserVariants(variants)
       } catch (err) {
         console.error('Failed to load user searches', err)
       }
@@ -65,6 +199,13 @@ export default function DiscoveryView({ pipeline }) {
     if (routerState) {
       restoreState(routerState)
       window.history.replaceState({}, document.title)
+    } else if (locationRouter.state?.preloadedVariants?.length) {
+      const { preloadedVariants, preloadedKeyword } = locationRouter.state
+      setKeywords(preloadedKeyword || '')
+      setSessionChips(preloadedVariants)
+      setActiveVariantLabel(preloadedKeyword || 'preloaded')
+      window.history.replaceState({}, document.title)
+      setTimeout(() => handleScan(null, preloadedKeyword || '', null, preloadedVariants), 300)
     } else if (sessionStateStr) {
       try {
         const sessionState = JSON.parse(sessionStateStr)
@@ -101,7 +242,7 @@ export default function DiscoveryView({ pipeline }) {
     })
   }
 
-  const handleScan = async (e, overrideKeywords = null, overrideLocation = null) => {
+  const handleScan = async (e, overrideKeywords = null, overrideLocation = null, overrideChips = null) => {
     if (e) e.preventDefault()
     
     const scanKeywords = overrideKeywords !== null ? overrideKeywords : keywords
@@ -111,6 +252,22 @@ export default function DiscoveryView({ pipeline }) {
 
     if (overrideKeywords !== null) setKeywords(overrideKeywords)
     if (overrideLocation !== null) setLocation(overrideLocation)
+
+    // Resolve variants for this keyword
+    const variantMatch = userVariants.find(
+      v => v.trigger.toLowerCase() === scanKeywords.trim().toLowerCase() && v.enabled
+    )
+    const chipsToUse = overrideChips
+      ? overrideChips
+      : variantMatch
+        ? (sessionChips.length > 0 && activeVariantLabel === variantMatch.trigger ? sessionChips : variantMatch.variants)
+        : expandKeywords(scanKeywords.trim(), userVariants)
+    const resolvedKeywords = chipsToUse.join(', ')
+    setActiveVariantLabel(variantMatch ? variantMatch.trigger : null)
+    if (variantMatch && !(sessionChips.length > 0 && activeVariantLabel === variantMatch.trigger)) {
+      setSessionChips(variantMatch.variants)
+      setChipsEdited(false)
+    }
 
     setLoading(true)
     setError('')
@@ -130,15 +287,33 @@ export default function DiscoveryView({ pipeline }) {
       api.updateSettings({ recent_searches: newRecent })
     }
 
+    const enabledPlatforms = Object.entries(platformPrefs || {})
+      .filter(([platform, enabled]) => enabled && platform !== 'facebook')
+      .map(([platform]) => platform)
+    setPlatformErrors([])
+    setPlatformCounts({})
+    setSearchSource(null)
+    setActiveProviders([])
+
     try {
-      const data = await api.discover(scanKeywords.trim(), scanLocation.trim(), 1)
+      console.log('[DISCOVERY] Sending request. Keywords:', resolvedKeywords, 'Location:', scanLocation.trim(), 'Platforms:', enabledPlatforms)
+      const data = await api.discover(resolvedKeywords, scanLocation.trim(), 1, enabledPlatforms)
+      console.log('[DISCOVERY] Response received. Results:', data.results?.length, 'Errors:', data.platform_errors, 'Counts:', data.platform_counts)
       if (data.error) throw new Error(data.error)
+
+      if (data.platform_errors?.length) setPlatformErrors(data.platform_errors)
+      if (data.platform_counts) setPlatformCounts(data.platform_counts)
+      setSearchSource(data.source || null)
+      setActiveProviders(data.active_providers || [])
+      setProviderStatus(data.provider_status || null)
+      setLastScanCounts(data.platform_counts || {})
+      setLastScanTotal(data.results?.length || 0)
 
       // Split into available and discarded (sold/reserved)
       const available = []
       const discardedItems = []
 
-      data.forEach(item => {
+      ;(data.results || data).forEach(item => {
         const status = (item.status || '').toLowerCase()
         const isSold = ['sold', 'reserved', 'vendido', 'reservado', 'inactive'].includes(status)
         if (isSold) {
@@ -148,6 +323,8 @@ export default function DiscoveryView({ pipeline }) {
         }
       })
 
+      console.log('[DEBUG] After status split: available:', available.length, 'discarded:', discardedItems.length)
+
       if (available.length === 0 && discardedItems.length === 0) {
         setError(t('discovery.no_listings'))
         setHasMore(false)
@@ -155,21 +332,59 @@ export default function DiscoveryView({ pipeline }) {
       }
 
       setHasMore(data.length > 0)
-      
-      // Deduplicate by item_id
-      const uniqueAvailable = available.filter((item, index, self) => 
-        index === self.findIndex((t) => t.item_id === item.item_id)
-      )
-      const uniqueDiscarded = discardedItems.filter((item, index, self) => 
-        index === self.findIndex((t) => t.item_id === item.item_id)
-      ).filter(d => !uniqueAvailable.some(a => a.item_id === d.item_id))
 
-      setListings(uniqueAvailable)
+      // ANCHOR:dedup_available
+      console.log('[DEDUP] Items before dedup:', available.map(i => ({
+        platform: i.platform,
+        url: i.url?.slice(0, 60),
+        item_id: i.item_id || 'EMPTY'
+      })))
+      // Deduplicate by URL (item_id is empty for OG-meta-scraped non-Wallapop results)
+      const seenUrls = new Set()
+      const uniqueAvailable = available.filter(item => {
+        const key = (item.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]
+        if (!key || seenUrls.has(key)) return false
+        seenUrls.add(key)
+        return true
+      })
+      console.log('[DEBUG] After URL dedup: uniqueAvailable:', uniqueAvailable.length, '(dropped', available.length - uniqueAvailable.length, ')')
+
+      // ANCHOR:platform_filter
+      console.log('[FILTER] All items before platform filter:', uniqueAvailable.map(i => ({
+        platform: i.platform,
+        url: i.url?.slice(0, 60),
+        title: i.title?.slice(0, 40)
+      })))
+      const knownPlatforms = ['es.wallapop.com', 'vinted.es', 'milanuncios.com', 'ebay.es']
+      const filteredAvailable = uniqueAvailable.filter(item =>
+        knownPlatforms.some(domain => (item.url || '').includes(domain))
+      )
+      const dropped = uniqueAvailable.filter(i => !knownPlatforms.some(domain => (i.url || '').includes(domain)))
+      if (dropped.length > 0) {
+        console.log('[FILTER] Dropped items:', dropped.map(i => ({
+          platform: i.platform,
+          url: i.url?.slice(0, 60)
+        })))
+      }
+      console.log('[DEBUG] After platform filter:', filteredAvailable.length, '(dropped', uniqueAvailable.length - filteredAvailable.length, 'unknown domain)')
+
+      const seenDiscardedUrls = new Set(filteredAvailable.map(a => (a.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]))
+      const uniqueDiscarded = discardedItems.filter(item => {
+        const key = (item.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]
+        if (!key || seenDiscardedUrls.has(key)) return false
+        seenDiscardedUrls.add(key)
+        return true
+      })
+      console.log('[DEBUG] After discarded dedup: uniqueDiscarded:', uniqueDiscarded.length)
+
+      setListings(filteredAvailable)
+      console.log('[DISCOVERY] Listings set. Available:', filteredAvailable.length, 'Discarded:', uniqueDiscarded.length)
       setDiscarded(uniqueDiscarded)
-      if (uniqueAvailable.length > 0) {
-        handleBatchAnalyze(uniqueAvailable, true)
+      if (filteredAvailable.length > 0) {
+        handleBatchAnalyze(filteredAvailable, true)
       }
     } catch (err) {
+      console.error('[DISCOVERY] Search failed:', err.message)
       setError(err.message || t('discovery.failed'))
     } finally {
       setLoading(false)
@@ -182,14 +397,24 @@ export default function DiscoveryView({ pipeline }) {
     setLoading(true)
     setPage(nextPage)
 
+    const enabledPlatforms = Object.entries(platformPrefs || {})
+      .filter(([platform, enabled]) => enabled && platform !== 'facebook')
+      .map(([platform]) => platform)
+
     try {
-      const data = await api.discover(keywords.trim(), location.trim(), nextPage)
+      const data = await api.discover(keywords.trim(), location.trim(), nextPage, enabledPlatforms)
       if (data.error) throw new Error(data.error)
+
+      if (data.platform_counts) setPlatformCounts(prev => {
+        const merged = { ...prev }
+        Object.entries(data.platform_counts).forEach(([p, n]) => { merged[p] = (merged[p] || 0) + n })
+        return merged
+      })
 
       const available = []
       const discardedItems = []
 
-      data.forEach(item => {
+      ;(data.results || data).forEach(item => {
         const status = (item.status || '').toLowerCase()
         const isSold = ['sold', 'reserved', 'vendido', 'reservado', 'inactive'].includes(status)
         if (isSold) {
@@ -206,16 +431,21 @@ export default function DiscoveryView({ pipeline }) {
 
       setHasMore(data.length > 0)
       setListings(prev => {
-        const existingIds = new Set(prev.map(i => i.item_id))
-        const newAvailable = available.filter(i => !existingIds.has(i.item_id))
+        const existingUrls = new Set(prev.map(i => (i.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]))
+        const newAvailable = available.filter(i => {
+          const key = (i.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]
+          return key && !existingUrls.has(key)
+        })
         return [...prev, ...newAvailable]
       })
-      
+
       setDiscarded(prev => {
-        const existingIds = new Set(prev.map(i => i.item_id))
-        const newListingsIds = new Set(available.map(i => i.item_id))
-        // Filtering out items that are already in discarded OR are in the current available list to avoid double move
-        const newDiscarded = discardedItems.filter(i => !existingIds.has(i.item_id) && !newListingsIds.has(i.item_id))
+        const existingUrls = new Set(prev.map(i => (i.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]))
+        const availableUrls = new Set(available.map(i => (i.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]))
+        const newDiscarded = discardedItems.filter(i => {
+          const key = (i.url || '').toLowerCase().replace(/\/$/, '').split('?')[0]
+          return key && !existingUrls.has(key) && !availableUrls.has(key)
+        })
         return [...prev, ...newDiscarded]
       })
 
@@ -229,9 +459,11 @@ export default function DiscoveryView({ pipeline }) {
     }
   }
 
+  // ANCHOR:fn_batch_analyze
   const handleBatchAnalyze = async (items, isNewScan = false) => {
     setAnalyzing(true)
     try {
+      // ANCHOR:batch_analyze_call
       const analysis = await api.batchAnalyze(items, keywords)
 
       setListings(prev => {
@@ -265,6 +497,8 @@ export default function DiscoveryView({ pipeline }) {
       })
     } catch (err) {
       console.error('Batch analysis failed:', err)
+      setError(t('discovery.batchAnalysisFailed'))
+      setListings(prev => prev.map(item => ({ ...item, analysis_error: true })))
     } finally {
       setAnalyzing(false)
     }
@@ -359,7 +593,83 @@ export default function DiscoveryView({ pipeline }) {
 
       {/* Search Form */}
       <div className="card p-6 mb-8 border-yellow-500/20 bg-gradient-to-br from-yellow-500/[0.03] to-transparent">
-        <form onSubmit={handleScan} className="flex flex-col sm:flex-row gap-3">
+        {activeVariantLabel && (
+        <div className="mb-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-black uppercase tracking-widest text-yellow-500">
+              Using your custom variants for "{activeVariantLabel}"
+            </span>
+            {chipsEdited && (
+              <button type="button"
+                onClick={async () => {
+                  const match = userVariants.find(v => v.trigger === activeVariantLabel)
+                  if (match) {
+                    const updated = await api.updateKeywordVariant(match.id, { variants: sessionChips })
+                    setUserVariants(prev => prev.map(v => v.id === match.id ? updated : v))
+                    setChipsEdited(false)
+                  }
+                }}
+                className="text-[10px] font-black text-blue-400 hover:underline uppercase tracking-widest">
+                Save to Settings
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {sessionChips.map((chip, i) => (
+              <span key={i} className="flex items-center gap-1 bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 text-xs rounded-full px-3 py-1">
+                {chip}
+                <button type="button"
+                  onClick={() => { const next = sessionChips.filter((_, j) => j !== i); setSessionChips(next); setChipsEdited(true) }}
+                  className="text-yellow-600 hover:text-red-400 ml-0.5">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <input
+              className="bg-slate-900/50 border border-dashed border-yellow-500/30 rounded-full px-3 py-1 text-xs text-slate-400 focus:outline-none focus:border-yellow-500/60 w-28"
+              placeholder="+ add"
+              value={chipInput}
+              onChange={e => setChipInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && chipInput.trim()) { e.preventDefault(); setSessionChips(prev => [...prev, chipInput.trim()]); setChipInput(''); setChipsEdited(true) } }}
+            />
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 mb-3">
+        {[
+          { key: 'wallapop',    label: 'Wallapop',            emoji: '🟠' },
+          { key: 'vinted',      label: 'Vinted',              emoji: '🟢' },
+          { key: 'milanuncios', label: 'Milanuncios', emoji: '🔵' },
+          { key: 'ebay_es',     label: 'eBay Spain',  emoji: '🔴' },
+        ].map(p => {
+          const enabled = platformPrefs[p.key] !== false
+          return (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => setPlatformPrefs(prev => ({ ...prev, [p.key]: !prev[p.key] }))}
+              className={`flex items-center gap-1.5 text-xs rounded-full px-3 py-1.5 border transition-all ${
+                enabled
+                  ? 'bg-slate-800 border-slate-600 text-slate-200'
+                  : 'bg-slate-900/30 border-slate-800 text-slate-600 opacity-50'
+              }`}
+            >
+              <span>{p.emoji}</span>
+              <span>{p.label}</span>
+              {!enabled && (
+                <span className="text-[9px] text-slate-600 ml-1 flex items-center gap-1">
+                  · Disabled
+                  <span
+                    className="text-blue-500 hover:underline cursor-pointer"
+                    onClick={e => { e.stopPropagation(); navigate('/management') }}
+                  >Enable →</span>
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <form onSubmit={handleScan} className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
             <input
@@ -395,9 +705,11 @@ export default function DiscoveryView({ pipeline }) {
             disabled={loading || !keywords.trim()}
             className="btn-primary flex-1 sm:flex-none bg-yellow-600 hover:bg-yellow-500 border-yellow-400/20 px-6 disabled:opacity-50 disabled:cursor-not-allowed group whitespace-nowrap"
           >
-            {loading ? (
-              <><RefreshCw className="w-4 h-4 animate-spin" /> {t('discovery.scanning')}</>
-            ) : (
+            {loading ? (() => {
+              const names = { wallapop: 'Wallapop', vinted: 'Vinted', milanuncios: 'Milanuncios', ebay_es: 'eBay ES' }
+              const active = Object.entries(platformPrefs).filter(([,v]) => v).map(([k]) => names[k] || k).join(', ')
+              return <><RefreshCw className="w-4 h-4 animate-spin" /> Searching {active}…</>
+            })() : (
               <><Rocket className="w-4 h-4 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" /> {t('discovery.scan')}</>
             )}
           </button>
@@ -466,6 +778,17 @@ export default function DiscoveryView({ pipeline }) {
         )}
       </div>
 
+      {/* Provider status bar */}
+      {providerStatus && (
+        <div className="mb-4">
+          <ProviderStatusBar
+            providerStatus={providerStatus}
+            lastScanCounts={lastScanCounts}
+            lastScanTotal={lastScanTotal}
+          />
+        </div>
+      )}
+
       {/* Status bar during analysis */}
       {analyzing && (
         <div className="mb-6 flex items-center gap-3 p-4 rounded-xl bg-yellow-500/5 border border-yellow-500/20 text-yellow-400 text-sm">
@@ -474,11 +797,63 @@ export default function DiscoveryView({ pipeline }) {
         </div>
       )}
 
+      {/* Per-platform counts */}
+      {!loading && Object.keys(platformCounts).length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-slate-500">
+          {Object.entries(platformCounts).map(([p, n]) => {
+            const labels = { wallapop: 'Wallapop', vinted: 'Vinted', milanuncios: 'Milanuncios', ebay_es: 'eBay ES' }
+            return <span key={p}><span className="text-slate-400 font-semibold">{labels[p] || p}</span>: {n}</span>
+          })}
+          <span className="text-slate-600">|</span>
+          <span>Total: {Object.values(platformCounts).reduce((a, b) => a + b, 0)}</span>
+        </div>
+      )}
+
+      {/* Platform errors */}
+      {platformErrors.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2 px-1">
+          {platformErrors.map((e, i) => (
+            <span key={i} className="text-[10px] text-slate-500 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-full">{e}: unavailable</span>
+          ))}
+        </div>
+      )}
+
+      {/* Search source badge */}
+      {!loading && listings.length > 0 && searchSource && (
+        <p className="text-xs text-gray-400 mt-2 mb-2">
+          {searchSource === 'personal'
+            ? `🔑 ${t('discovery.searchingVia')} ${activeProviders.join(' + ')}`
+            : t('discovery.poweredByFlipOps')
+          }
+        </p>
+      )}
+
       {/* Filtered out notice */}
       {!analyzing && filteredOut > 0 && (
         <div className="mb-4 flex items-center gap-2 text-xs text-slate-500 px-1">
           <X className="w-3 h-3 text-red-500/60" />
           <span>{t(filteredOut > 1 ? 'discovery.filtered_out_plural' : 'discovery.filtered_out', { count: filteredOut })}</span>
+        </div>
+      )}
+
+      {usageSummary?.anyLowCredits && !bannerDismissed && (
+        <div className="mb-4 flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+          <span className="mt-0.5">⚠️</span>
+          <span className="flex-1">
+            {usageSummary.lowProviders?.length === 1
+              ? t('discovery.lowCreditsOne', { provider: usageSummary.lowProviders[0] })
+              : t('discovery.lowCreditsMany', { providers: usageSummary.lowProviders?.join(', ') })}
+            {' '}
+            <button className="underline" onClick={() => window.location.href = '/FlipOps/management?tab=providers'}>
+              {t('discovery.topUpLink')}
+            </button>
+          </span>
+          <button
+            onClick={() => { setBannerDismissed(true); sessionStorage.setItem('flipops_usage_banner_dismissed', '1') }}
+            className="text-amber-400 hover:text-amber-200 ml-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -500,7 +875,7 @@ export default function DiscoveryView({ pipeline }) {
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 hidden md:table-row-group">
                   {listings.map((item) => (
-                    <tr key={item.item_id} className="hover:bg-yellow-500/[0.02] transition-colors group border-b border-slate-700/50 lg:border-none">
+                    <tr key={item.url || item.item_id} className="hover:bg-yellow-500/[0.02] transition-colors group border-b border-slate-700/50 lg:border-none">
                       <td className="py-4 px-6">
                         <div className="flex items-start gap-4">
                           <div className="w-12 h-12 rounded-lg bg-slate-800 overflow-hidden shrink-0 border border-slate-700 group-hover:border-yellow-500/30 transition-colors mt-0.5">
@@ -511,7 +886,8 @@ export default function DiscoveryView({ pipeline }) {
                             )}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-bold text-slate-200 leading-snug group-hover:text-yellow-400 transition-colors">{item.title}</div>
+                            <PlatformBadge platform={item.platform || 'wallapop'} />
+                            <div className="text-sm font-bold text-slate-200 leading-snug group-hover:text-yellow-400 transition-colors mt-1">{item.title}</div>
                             <div className="flex items-center gap-3 mt-1 mb-2">
                               {item.location?.city && (
                                 <span className="text-[10px] text-slate-500 flex items-center gap-1">
@@ -598,7 +974,7 @@ export default function DiscoveryView({ pipeline }) {
                             {item.red_flags?.length > 0 && (
                               <div className="flex flex-wrap gap-1">
                                 {item.red_flags.map((flag, i) => (
-                                  <span key={i} className="text-[9px] text-red-400/80 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded">⚠ {flag.replace(/_/g, ' ')}</span>
+                                  <span key={flag || i} className="text-[9px] text-red-400/80 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded">⚠ {flag.replace(/_/g, ' ')}</span>
                                 ))}
                               </div>
                             )}
@@ -624,7 +1000,7 @@ export default function DiscoveryView({ pipeline }) {
             {/* Mobile Card Layout for Main Listings */}
             <div className="md:hidden divide-y divide-slate-800/50">
               {listings.map(item => (
-                <div key={item.item_id} className="p-4 space-y-4">
+                <div key={item.url || item.item_id} className="p-4 space-y-4">
                   <div className="flex gap-4">
                     <div className="w-16 h-16 rounded-xl bg-slate-800 overflow-hidden shrink-0 border border-slate-700">
                       {item.images?.[0] ? (
@@ -634,7 +1010,8 @@ export default function DiscoveryView({ pipeline }) {
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-bold text-slate-100 truncate mb-1">{item.title}</div>
+                      <PlatformBadge platform={item.platform || 'wallapop'} />
+                      <div className="text-sm font-bold text-slate-100 truncate mt-1 mb-1">{item.title}</div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="text-[10px] text-slate-500 flex items-center gap-1">
                           <MapPin className="w-2.5 h-2.5" /> {item.location?.city || 'Unknown'}
@@ -762,7 +1139,7 @@ export default function DiscoveryView({ pipeline }) {
                       </thead>
                       <tbody className="divide-y divide-slate-800/30">
                         {discarded.map(d => (
-                          <tr key={d.item_id} className="hover:bg-white/[0.01] transition-colors group">
+                          <tr key={d.url || d.item_id} className="hover:bg-white/[0.01] transition-colors group">
                             <td className="py-3 px-6">
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 rounded bg-slate-800 overflow-hidden shrink-0 border border-slate-700/50">
@@ -802,7 +1179,7 @@ export default function DiscoveryView({ pipeline }) {
                   {/* Mobile Card Layout for Discarded */}
                   <div className="md:hidden divide-y divide-slate-800/40">
                     {discarded.map(d => (
-                       <div key={d.item_id} className="p-4 space-y-3">
+                       <div key={d.url || d.item_id} className="p-4 space-y-3">
                           <div className="flex gap-3">
                             <div className="w-10 h-10 rounded bg-slate-800 overflow-hidden shrink-0 border border-slate-700/50">
                               {d.images?.[0] && <img src={d.images[0]} className="w-full h-full object-cover opacity-50 grayscale" alt="" referrerPolicy="no-referrer" />}

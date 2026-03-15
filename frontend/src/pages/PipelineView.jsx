@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Layers, Plus, Trash2, ExternalLink, TrendingUp, TrendingDown, Calendar, ChevronDown, ChevronRight, Clock, MapPin, MessageCircle, Tag, Sparkles, Search, Filter, DollarSign, CheckCircle } from 'lucide-react'
 import AppointmentModal from '../components/AppointmentModal'
+import PlatformBadge from '../components/PlatformBadge'
 import { useApi } from '../hooks/useApi'
 import { useTranslation } from 'react-i18next'
 
@@ -84,7 +85,7 @@ function AddDealModal({ onAdd, onClose, initialData }) {
   )
 }
 
-function DealRow({ deal, onUpdate, onDelete, onSchedule, onEditAppointment, appointments = [], statuses }) {
+function DealRow({ deal, onUpdate, onDelete, onSchedule, onEditAppointment, appointments = [], statuses, selectMode, isSelected, onToggleSelect }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
@@ -109,6 +110,17 @@ function DealRow({ deal, onUpdate, onDelete, onSchedule, onEditAppointment, appo
   return (
     <>
     <tr className={`hidden md:table-row border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors ${expanded ? 'bg-slate-700/10' : ''}`}>
+      {selectMode && (
+        <td className="py-3 px-4 text-center">
+          <input
+            type="checkbox"
+            className="w-4 h-4 rounded"
+            checked={isSelected}
+            onChange={() => onToggleSelect(deal.id)}
+            onClick={e => e.stopPropagation()}
+          />
+        </td>
+      )}
       <td className="py-3 px-4 text-center">
         <button
           onClick={() => setExpanded(!expanded)}
@@ -118,7 +130,8 @@ function DealRow({ deal, onUpdate, onDelete, onSchedule, onEditAppointment, appo
         </button>
       </td>
       <td className="py-3 px-4">
-        <div className="flex items-center gap-2">
+        <PlatformBadge platform={deal.platform || 'wallapop'} />
+        <div className="flex items-center gap-2 mt-1">
           <div className="text-sm font-medium text-slate-100">{deal.product}</div>
           {appointments.length > 0 && (
             <button 
@@ -214,7 +227,18 @@ function DealRow({ deal, onUpdate, onDelete, onSchedule, onEditAppointment, appo
       <td colSpan="11" className="p-0">
         <div className={`p-3 sm:p-4 ${expanded ? 'bg-slate-700/10' : ''} space-y-3 max-w-[100vw] overflow-hidden`}>
           <div className="flex items-center justify-between gap-2 px-1">
-             <div className="text-sm font-black text-white truncate flex-1">{deal.product}</div>
+             {selectMode && (
+               <input
+                 type="checkbox"
+                 className="w-5 h-5 rounded shrink-0"
+                 checked={isSelected}
+                 onChange={() => onToggleSelect(deal.id)}
+               />
+             )}
+             <div className="flex-1 min-w-0">
+               <PlatformBadge platform={deal.platform || 'wallapop'} />
+               <div className="text-sm font-black text-white truncate mt-0.5">{deal.product}</div>
+             </div>
              <div className="flex items-center gap-1.5 shrink-0">
                 {appointments.length > 0 && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />}
                 <select
@@ -399,6 +423,10 @@ export default function PipelineView({ pipeline }) {
   const [selectedAppointment, setSelectedAppointment] = useState(null)
   const [showSoldItems, setShowSoldItems] = useState(false)
   const [appointments, setAppointments] = useState([])
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkStatus, setBulkStatus] = useState('Negotiating')
+  const [bulkApplying, setBulkApplying] = useState(false)
 
   const { deals, addDeal, updateDeal, deleteDeal, STATUS_ORDER, stats } = pipeline
 
@@ -412,6 +440,47 @@ export default function PipelineView({ pipeline }) {
       setAppointments(data)
     } catch (err) {
       console.error('Failed to load appointments')
+    }
+  }
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    const activeDeals = deals.filter(d => d.status !== 'Sold')
+    if (selectedIds.size === activeDeals.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(activeDeals.map(d => d.id)))
+    }
+  }
+
+  const exitSelectMode = () => {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  const applyBulkStatus = async () => {
+    if (selectedIds.size === 0) return
+    setBulkApplying(true)
+    try {
+      const timestamps = {}
+      if (bulkStatus === 'Sold') timestamps.soldAt = new Date().toISOString()
+      if (bulkStatus === 'Listed') timestamps.listedAt = new Date().toISOString()
+      if (bulkStatus === 'Bought') timestamps.boughtAt = new Date().toISOString()
+
+      Array.from(selectedIds).forEach(id => {
+        updateDeal(id, { status: bulkStatus, ...timestamps })
+      })
+      exitSelectMode()
+    } finally {
+      setBulkApplying(false)
     }
   }
 
@@ -435,9 +504,17 @@ export default function PipelineView({ pipeline }) {
           <span>{t('pipeline.header')}</span>
           <span className="text-sm font-normal text-slate-500 ml-1">({t('pipeline.deals_count', { count: deals.length })})</span>
         </h1>
-        <button onClick={() => setShowModal(true)} className="btn-primary">
-          <Plus className="w-4 h-4" /> {t('pipeline.add_deal')}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setSelectMode(s => !s); setSelectedIds(new Set()) }}
+            className={`btn text-xs ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            {selectMode ? t('pipeline.select_cancel') : t('pipeline.select')}
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-primary">
+            <Plus className="w-4 h-4" /> {t('pipeline.add_deal')}
+          </button>
+        </div>
       </div>
 
       {/* Quick stats */}
@@ -470,6 +547,16 @@ export default function PipelineView({ pipeline }) {
           <table className="w-full text-left min-w-full md:min-w-[700px]">
             <thead className="hidden md:table-header-group">
               <tr className="border-b border-slate-700">
+                {selectMode && (
+                  <th className="py-3 px-4">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded"
+                      checked={selectedIds.size > 0 && selectedIds.size === deals.filter(d => d.status !== 'Sold').length}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
+                )}
                 <th className="py-3 px-4 text-center"></th>
                 {[t('pipeline.col_product'), 'Initial', 'Target Buy', 'Real Buy', 'Target Sell', 'Real Sell', t('pipeline.col_status'), t('pipeline.col_profit'), t('pipeline.col_margin'), ''].map(h => (
                   <th key={h} className={`py-3 px-4 text-xs font-semibold text-slate-400 uppercase tracking-wide ${['Initial', 'Target Buy', 'Real Buy', 'Target Sell', 'Real Sell', t('pipeline.col_profit'), t('pipeline.col_margin')].includes(h) ? 'text-right' : ''}`}>{h}</th>
@@ -495,6 +582,9 @@ export default function PipelineView({ pipeline }) {
                   }}
                   appointments={appointments.filter(a => a.deal_id === deal.id)}
                   statuses={STATUS_ORDER}
+                  selectMode={selectMode}
+                  isSelected={selectedIds.has(deal.id)}
+                  onToggleSelect={toggleSelect}
                 />
               ))}
               {deals.filter(d => d.status !== 'Sold').length === 0 && (
@@ -554,6 +644,9 @@ export default function PipelineView({ pipeline }) {
                         }}
                         appointments={appointments.filter(a => a.deal_id === deal.id)}
                         statuses={STATUS_ORDER}
+                        selectMode={false}
+                        isSelected={false}
+                        onToggleSelect={() => {}}
                       />
                     ))}
                   </tbody>
@@ -563,6 +656,37 @@ export default function PipelineView({ pipeline }) {
           </div>
         )}
       </div>
+      )}
+
+      {selectMode && selectedIds.size > 0 && (
+        <div
+          className="fixed left-0 right-0 z-50 bg-surface-900 border-t border-slate-700/50 px-4 py-3 flex items-center gap-3"
+          style={{ bottom: 'calc(60px + env(safe-area-inset-bottom, 0px))' }}
+        >
+          <span className="text-sm font-bold text-slate-300 shrink-0">
+            {selectedIds.size} {t('pipeline.selected')}
+          </span>
+          <select
+            className="input flex-1 text-sm py-1"
+            value={bulkStatus}
+            onChange={e => setBulkStatus(e.target.value)}
+          >
+            {STATUS_ORDER.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <button
+            onClick={applyBulkStatus}
+            disabled={bulkApplying}
+            className="btn-primary text-sm py-1.5 shrink-0"
+          >
+            {bulkApplying ? t('common.loading') : t('pipeline.apply')}
+          </button>
+          <button
+            onClick={exitSelectMode}
+            className="btn-secondary text-sm py-1.5 shrink-0"
+          >
+            {t('common.cancel')}
+          </button>
+        </div>
       )}
 
       {showModal && <AddDealModal onAdd={addDeal} onClose={() => setShowModal(false)} initialData={initialData} />}

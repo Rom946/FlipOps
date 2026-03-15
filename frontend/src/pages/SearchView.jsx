@@ -4,10 +4,11 @@ import {
   Download, Plus, Edit3, MapPin, User, AlertCircle, Navigation,
   Image as ImageIcon, RefreshCw, Copy, Check, ExternalLink,
   Sparkles, Clock, Truck, BarChart2, Calendar, ChevronDown, ChevronUp,
-  Tag, Info, TrendingUp, Award, Zap, ChevronLeft
+  Tag, Info, TrendingUp, Award, Zap, ChevronLeft, Search
 } from 'lucide-react'
 import { useApi } from '../hooks/useApi'
 import { useTranslation } from 'react-i18next'
+import { extractWallapopUrl } from '../utils/extractWallapopUrl'
 
 export default function SearchView({ pipeline }) {
   const navigate = useNavigate()
@@ -40,6 +41,13 @@ export default function SearchView({ pipeline }) {
   const [negTab, setNegTab] = useState('opener')
 
   const [copySuccess, setCopySuccess] = useState(false)
+  const [searchVariants, setSearchVariants] = useState([])
+  const [variantsSaved, setVariantsSaved] = useState(false)
+
+  const [urlHint, setUrlHint] = useState(null)  // { type: 'detected' | 'error', text: string } | null
+  const [importTimer, setImportTimer] = useState(null)
+  const [extractedFromPaste, setExtractedFromPaste] = useState(false)
+  const [duplicateWarning, setDuplicateWarning] = useState(null) // { existingDeal: {...}, daysAgo: number }
 
   useEffect(() => {
     fetchProfile()
@@ -90,6 +98,117 @@ export default function SearchView({ pipeline }) {
     }
   }
 
+  function normalizeUrlForDedup(url) {
+    if (!url) return ''
+    return url
+      .toLowerCase()
+      .replace(/^https?:\/\/(www\.)?(es\.)?wallapop\.com/, '')
+      .split('?')[0]
+      .split('#')[0]
+      .replace(/\/$/, '')
+  }
+
+  const handleUrlChange = (e) => {
+    const text = e.target.value
+    const { url: extracted, wasExtracted } = extractWallapopUrl(text)
+
+    if (wasExtracted && extracted) {
+      setUrl(extracted)
+      setUrlHint({ type: 'detected', text: extracted })
+      setExtractedFromPaste(true)
+    } else if (!extracted && text.length > 10 && !text.startsWith('http')) {
+      setUrl(text)
+      setUrlHint({ type: 'error', text: 'No Wallapop URL found. Please paste a valid link.' })
+      setExtractedFromPaste(false)
+    } else {
+      setUrl(text)
+      setUrlHint(null)
+      setExtractedFromPaste(false)
+    }
+  }
+
+  const handleUrlPaste = (e) => {
+    const text = e.clipboardData.getData('text')
+    const { url: extracted, wasExtracted } = extractWallapopUrl(text)
+
+    if (extracted) {
+      e.preventDefault()
+      setUrl(extracted)
+
+      if (wasExtracted) {
+        setUrlHint({ type: 'detected', text: extracted })
+        if (!url.trim()) {
+          setExtractedFromPaste(true)
+          const timer = setTimeout(() => {
+            runAnalysis(extracted)
+            setExtractedFromPaste(false)
+            setUrlHint(null)
+          }, 800)
+          setImportTimer(timer)
+        }
+      } else {
+        setUrlHint(null)
+      }
+    }
+  }
+
+  const cancelAutoImport = () => {
+    if (importTimer) {
+      clearTimeout(importTimer)
+      setImportTimer(null)
+      setExtractedFromPaste(false)
+      setUrlHint(null)
+    }
+  }
+
+  const runAnalysisForce = async (targetUrl) => {
+    if (!targetUrl?.trim()) return
+    setUrl(targetUrl)
+    setLoading(true)
+    setError('')
+    setListing(null)
+    setAnalysis(null)
+    setSearchVariants([])
+    setVariantsSaved(false)
+    setShowManual(false)
+    setIsDescExpanded(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+
+    try {
+      const data = await api.importListing(targetUrl)
+      setListing(data)
+      const initialMaxBuy = Math.round(Number(data.price) * 0.70)
+      setNegotiation({ maxBuy: initialMaxBuy, tone: 'friendly', loading: true })
+      try {
+        const titleText = typeof data.title === 'object' ? (data.title.original || data.title.translated) : data.title
+        const descText = typeof data.description === 'object' ? (data.description.original || data.description.translated) : data.description
+        const analysisData = await api.analyzeListing({
+          product: titleText,
+          listed_price: data.price,
+          target_price: initialMaxBuy,
+          tone: profile?.default_tone || 'friendly',
+          preferred_language: profile?.preferred_language || 'en',
+          negotiation_language: profile?.negotiation_language || 'es',
+          description: descText,
+          condition: data.condition
+        })
+        setAnalysis(analysisData)
+        setSearchVariants(analysisData?.search_variants || [])
+        setVariantsSaved(false)
+        saveToHistory(data, analysisData?.flip_analysis?.deal_score || 0, 'Discarded')
+      } catch (negErr) {
+        console.error("Analysis failed:", negErr)
+      } finally {
+        setNegotiation(prev => ({ ...prev, loading: false }))
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to import listing.')
+      setShowManual(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const runAnalysis = async (targetUrl) => {
     if (!targetUrl?.trim()) return
     setUrl(targetUrl)
@@ -97,9 +216,25 @@ export default function SearchView({ pipeline }) {
     setError('')
     setListing(null)
     setAnalysis(null)
+    setSearchVariants([])
+    setVariantsSaved(false)
     setShowManual(false)
     setIsDescExpanded(false)
+    setDuplicateWarning(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+
+    // Check for duplicate in pipeline
+    const normalizedNew = normalizeUrlForDedup(targetUrl)
+    if (normalizedNew && pipeline?.deals) {
+      const existing = pipeline.deals.find(d => normalizeUrlForDedup(d.url) === normalizedNew)
+      if (existing) {
+        const createdAt = existing.created_at ? new Date(existing.created_at) : null
+        const daysAgo = createdAt ? Math.floor((Date.now() - createdAt) / (1000 * 60 * 60 * 24)) : null
+        setDuplicateWarning({ existingDeal: existing, daysAgo })
+        setLoading(false)
+        return
+      }
+    }
 
     try {
       const data = await api.importListing(targetUrl)
@@ -123,6 +258,8 @@ export default function SearchView({ pipeline }) {
           condition: data.condition
         })
         setAnalysis(analysisData)
+        setSearchVariants(analysisData?.search_variants || [])
+        setVariantsSaved(false)
         saveToHistory(data, analysisData?.flip_analysis?.deal_score || 0, 'Discarded')
       } catch (negErr) {
         console.error("Analysis failed:", negErr)
@@ -181,6 +318,8 @@ export default function SearchView({ pipeline }) {
         condition: l.condition || 'Buen estado'
       })
       setAnalysis(analysisData)
+      setSearchVariants(analysisData?.search_variants || [])
+      setVariantsSaved(false)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -287,14 +426,34 @@ export default function SearchView({ pipeline }) {
         <form onSubmit={handleImport} className={`flex gap-3 ${listing ? 'max-w-md w-full' : 'w-full max-w-2xl'}`}>
           <div className="relative flex-1">
             <input
-              className="input w-full pl-10"
-              type="url"
+              className="input w-full pl-10 pr-24 py-3 text-sm"
+              type="text"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={handleUrlChange}
+              onPaste={handleUrlPaste}
               placeholder={t('search.placeholder')}
-              required
+              disabled={loading}
             />
             <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            {urlHint && (
+              <div className={`mt-1.5 flex items-start justify-between gap-2 text-xs px-1 absolute top-full left-0 right-0 ${urlHint.type === 'detected' ? 'text-emerald-400' : 'text-red-400'}`}>
+                <span className="break-all leading-snug">
+                  {urlHint.type === 'detected'
+                    ? `URL detected: ${urlHint.text}`
+                    : urlHint.text
+                  }
+                </span>
+                {extractedFromPaste && (
+                  <button
+                    type="button"
+                    onClick={cancelAutoImport}
+                    className="shrink-0 text-slate-400 hover:text-slate-200 font-bold"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <button type="submit" className="btn-primary" disabled={loading}>
             {loading ? <span className="spinner" /> : <TrendingUp className="w-4 h-4" />}
@@ -310,6 +469,45 @@ export default function SearchView({ pipeline }) {
           </button>
         </form>
       </div>
+
+      {/* Duplicate Warning */}
+      {duplicateWarning && (
+        <div className="card border border-amber-500/30 bg-amber-500/5 p-4 mb-4 animate-fade-in-up">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-amber-300">You've imported this listing before</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {duplicateWarning.existingDeal.product}
+                {duplicateWarning.daysAgo !== null ? ` — imported ${duplicateWarning.daysAgo === 0 ? 'today' : `${duplicateWarning.daysAgo} day${duplicateWarning.daysAgo !== 1 ? 's' : ''} ago`}` : ''}
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => navigate('/pipeline')}
+                  className="btn-secondary text-xs py-1.5"
+                >
+                  View in Pipeline →
+                </button>
+                <button
+                  onClick={() => {
+                    setDuplicateWarning(null)
+                    runAnalysisForce(url)
+                  }}
+                  className="btn-primary text-xs py-1.5"
+                >
+                  Import Anyway
+                </button>
+                <button
+                  onClick={() => setDuplicateWarning(null)}
+                  className="btn-ghost text-xs py-1.5"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Error & Manual Fallback - Same as before but styled better */}
       {error && (
@@ -496,6 +694,32 @@ export default function SearchView({ pipeline }) {
             }} className="btn-secondary w-full justify-center py-3 bg-emerald-600/10 text-emerald-400 border-emerald-600/20 hover:bg-emerald-600/20 shadow-lg shadow-emerald-500/5">
               <Edit3 className="w-4 h-4" /> {t('search.create_listing')}
             </button>
+            {searchVariants.length > 0 && (
+              <div>
+                <button
+                  onClick={() => navigate('/discovery', { state: { preloadedVariants: searchVariants, preloadedKeyword: listing?.title || '' } })}
+                  className="btn w-full justify-center py-3 bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors"
+                >
+                  <Search className="w-4 h-4" /> {t('search.findSimilar')}
+                </button>
+                {!variantsSaved && (
+                  <p className="text-xs text-slate-500 mt-1 text-center">
+                    {t('search.saveVariantsPrompt')}
+                    <button
+                      className="text-blue-400 underline ml-1"
+                      onClick={async () => {
+                        const trigger = listing?.title?.split(' ').slice(0, 2).join(' ') || 'Product'
+                        await api.createKeywordVariant({ trigger, variants: searchVariants, source: 'ai' })
+                        setVariantsSaved(true)
+                      }}
+                    >
+                      {t('search.saveVariants')}
+                    </button>
+                  </p>
+                )}
+                {variantsSaved && <p className="text-xs text-emerald-400 mt-1 text-center">{t('search.variantsSaved')}</p>}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -840,6 +1064,32 @@ export default function SearchView({ pipeline }) {
               }} className="btn-secondary w-full justify-center py-3 bg-emerald-600/10 text-emerald-400 border-emerald-600/20 hover:bg-emerald-600/20 shadow-lg shadow-emerald-500/5">
                 <Edit3 className="w-4 h-4" /> {t('search.create_listing')}
               </button>
+              {searchVariants.length > 0 && (
+                <div>
+                  <button
+                    onClick={() => navigate('/discovery', { state: { preloadedVariants: searchVariants, preloadedKeyword: listing?.title || '' } })}
+                    className="btn w-full justify-center py-3 bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20 transition-colors"
+                  >
+                    <Search className="w-4 h-4" /> {t('search.findSimilar')}
+                  </button>
+                  {!variantsSaved && (
+                    <p className="text-xs text-slate-500 mt-1 text-center">
+                      {t('search.saveVariantsPrompt')}
+                      <button
+                        className="text-blue-400 underline ml-1"
+                        onClick={async () => {
+                          const trigger = listing?.title?.split(' ').slice(0, 2).join(' ') || 'Product'
+                          await api.createKeywordVariant({ trigger, variants: searchVariants, source: 'ai' })
+                          setVariantsSaved(true)
+                        }}
+                      >
+                        {t('search.saveVariants')}
+                      </button>
+                    </p>
+                  )}
+                  {variantsSaved && <p className="text-xs text-emerald-400 mt-1 text-center">{t('search.variantsSaved')}</p>}
+                </div>
+              )}
             </div>
           </div>
         </div>

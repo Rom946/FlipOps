@@ -1,5 +1,7 @@
 import { Search, Zap, MessageSquare, Tag, Layers, BarChart2, MapPin, Key, Globe, ChevronRight, Sparkles, MessageCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 const colorMap = {
   blue:    { bg: 'bg-blue-500/10',    text: 'text-blue-400',    border: 'border-blue-500/20',    dot: 'bg-blue-500' },
@@ -14,65 +16,68 @@ const colorMap = {
 
 export default function HowToView() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
 
   const steps = [
     {
       icon: Search, color: 'blue',
-      title: t('howto.s1_title'), path: t('howto.s1_path'),
+      title: t('howto.s1_title'), path: t('howto.s1_path'), route: '/search',
       summary: t('howto.s1_summary'),
       steps: [t('howto.s1_step1'), t('howto.s1_step2'), t('howto.s1_step3'), t('howto.s1_step4'), t('howto.s1_step5'), t('howto.s1_step6')],
       tip: t('howto.s1_tip'),
     },
     {
       icon: Zap, color: 'yellow',
-      title: t('howto.s2_title'), path: t('howto.s2_path'),
+      title: t('howto.s2_title'), path: t('howto.s2_path'), route: '/discovery',
       summary: t('howto.s2_summary'),
       steps: [t('howto.s2_step1'), t('howto.s2_step2'), t('howto.s2_step3'), t('howto.s2_step4'), t('howto.s2_step5')],
       tip: t('howto.s2_tip'),
     },
     {
       icon: MessageSquare, color: 'indigo',
-      title: t('howto.s3_title'), path: t('howto.s3_path'),
+      title: t('howto.s3_title'), path: t('howto.s3_path'), route: '/negotiate',
       summary: t('howto.s3_summary'),
       steps: [t('howto.s3_step1'), t('howto.s3_step2'), t('howto.s3_step3'), t('howto.s3_step4')],
       tip: t('howto.s3_tip'),
     },
     {
       icon: Tag, color: 'emerald',
-      title: t('howto.s4_title'), path: t('howto.s4_path'),
+      title: t('howto.s4_title'), path: t('howto.s4_path'), route: '/listing',
       summary: t('howto.s4_summary'),
       steps: [t('howto.s4_step1'), t('howto.s4_step2'), t('howto.s4_step3'), t('howto.s4_step4')],
       tip: t('howto.s4_tip'),
     },
     {
       icon: Layers, color: 'purple',
-      title: t('howto.s5_title'), path: t('howto.s5_path'),
+      title: t('howto.s5_title'), path: t('howto.s5_path'), route: '/pipeline',
       summary: t('howto.s5_summary'),
       steps: [t('howto.s5_step1'), t('howto.s5_step2'), t('howto.s5_step3'), t('howto.s5_step4')],
       tip: t('howto.s5_tip'),
     },
     {
       icon: BarChart2, color: 'pink',
-      title: t('howto.s6_title'), path: t('howto.s6_path'),
+      title: t('howto.s6_title'), path: t('howto.s6_path'), route: '/dashboard',
       summary: t('howto.s6_summary'),
       steps: [t('howto.s6_step1'), t('howto.s6_step2'), t('howto.s6_step3')],
       tip: t('howto.s6_tip'),
     },
     {
       icon: Sparkles, color: 'orange',
-      title: t('howto.s7_title'), path: t('howto.s7_path'),
+      title: t('howto.s7_title'), path: t('howto.s7_path'), route: '/management',
       summary: t('howto.s7_summary'),
       steps: [t('howto.s7_step1'), t('howto.s7_step2'), t('howto.s7_step3'), t('howto.s7_step4')],
       tip: t('howto.s7_tip'),
     },
     {
       icon: MessageCircle, color: 'teal',
-      title: t('howto.s8_title'), path: t('howto.s8_path'),
+      title: t('howto.s8_title'), path: t('howto.s8_path'), route: '/negotiate',
       summary: t('howto.s8_summary'),
       steps: [t('howto.s8_step1'), t('howto.s8_step2'), t('howto.s8_step3'), t('howto.s8_step4')],
       tip: t('howto.s8_tip'),
     },
-  ]
+  ].filter(s => s.route !== '/admin' || isAdmin)
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-10 animate-fade-in">
@@ -108,12 +113,16 @@ export default function HowToView() {
           const c = colorMap[section.color]
           const Icon = section.icon
           return (
-            <div key={i} className={`card p-6 border ${c.border}`}>
+            <div
+              key={i}
+              onClick={() => navigate(section.route)}
+              className={`card p-6 border ${c.border} cursor-pointer transition-all duration-150 hover:bg-slate-700/20 hover:border-opacity-60`}
+            >
               <div className="flex items-start gap-4 mb-5">
                 <div className={`w-10 h-10 rounded-xl ${c.bg} flex items-center justify-center shrink-0`}>
                   <Icon className={`w-5 h-5 ${c.text}`} />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className={`text-base font-black ${c.text}`}>{section.title}</h2>
                     <span className="text-[9px] font-black uppercase tracking-widest text-slate-600 bg-slate-800 px-2 py-0.5 rounded">
@@ -122,6 +131,7 @@ export default function HowToView() {
                   </div>
                   <p className="text-slate-400 text-sm mt-1">{section.summary}</p>
                 </div>
+                <ChevronRight className={`w-5 h-5 ${c.text} shrink-0 mt-0.5 opacity-40 group-hover:opacity-100 transition-opacity`} />
               </div>
 
               <ol className="space-y-2 mb-4 pl-1">

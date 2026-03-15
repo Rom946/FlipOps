@@ -1,18 +1,18 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { 
-  Search, 
-  Sparkles, 
-  MessageSquare, 
-  LayoutDashboard, 
-  Calendar as CalendarIcon, 
-  TrendingUp, 
-  Clock, 
-  MapPin, 
+import {
+  Search,
+  Sparkles,
+  MessageSquare,
+  LayoutDashboard,
+  Calendar as CalendarIcon,
+  Clock,
+  MapPin,
   ChevronRight,
   Plus,
-  Target,
-  Navigation
+  Navigation,
+  X,
+  BookOpen
 } from 'lucide-react'
 import { useApi } from '../hooks/useApi'
 import { useTranslation } from 'react-i18next'
@@ -24,8 +24,12 @@ export default function HomeView({ pipeline }) {
   const clickTimeout = useRef(null)
   const [appointments, setAppointments] = useState([])
   const [loading, setLoading] = useState(true)
+  const [gsVisible, setGsVisible] = useState(() => localStorage.getItem('gs_hidden') !== '1')
 
-  const handleAppClick = (e, app) => {
+  const hideGs = () => { setGsVisible(false); localStorage.setItem('gs_hidden', '1') }
+  const showGs = () => { setGsVisible(true); localStorage.removeItem('gs_hidden') }
+
+  const handleAppClick = (e, _app) => {
     e.preventDefault()
     if (clickTimeout.current) return
     clickTimeout.current = setTimeout(() => {
@@ -61,59 +65,85 @@ export default function HomeView({ pipeline }) {
   const stats = pipeline?.stats || { totalProfit: 0, activeDeals: 0, avgMargin: 0 }
 
   const FEATURE_CARDS = [
-    {
-      title: 'Global Search',
-      desc: 'Find undervalued listings across Wallapop with AI-powered filtering.',
-      icon: Search,
-      path: '/search',
-      color: 'blue',
-      tag: 'Core'
-    },
-    {
-      title: 'Discovery Engine',
-      desc: 'Automatic lead generation based on your preferred niches and keywords.',
-      icon: Sparkles,
-      path: '/discovery',
-      color: 'amber',
-      tag: 'AI Power'
-    },
-    {
-      title: 'Negotiation Helper',
-      desc: 'AI-driven responses to close deals faster and cheaper.',
-      icon: MessageSquare,
-      path: '/negotiate',
-      color: 'emerald',
-      tag: 'Strategic'
-    },
-    {
-      title: 'Deal Pipeline',
-      desc: 'Track your inventory from acquisition to final sale.',
-      icon: LayoutDashboard,
-      path: '/pipeline',
-      color: 'purple',
-      tag: 'Management'
-    }
+    { titleKey: 'home.feature_search_title', descKey: 'home.feature_search_desc', tagKey: 'home.feature_search_tag', icon: Search, path: '/search', color: 'blue' },
+    { titleKey: 'home.feature_discovery_title', descKey: 'home.feature_discovery_desc', tagKey: 'home.feature_discovery_tag', icon: Sparkles, path: '/discovery', color: 'amber' },
+    { titleKey: 'home.feature_negotiate_title', descKey: 'home.feature_negotiate_desc', tagKey: 'home.feature_negotiate_tag', icon: MessageSquare, path: '/negotiate', color: 'emerald' },
+    { titleKey: 'home.feature_pipeline_title', descKey: 'home.feature_pipeline_desc', tagKey: 'home.feature_pipeline_tag', icon: LayoutDashboard, path: '/pipeline', color: 'purple' },
+  ]
+
+  const GS_STEPS = [
+    { n: 1, emoji: '🔍', titleKey: 'home.gs_1_title', descKey: 'home.gs_1_desc', route: '/search' },
+    { n: 2, emoji: '🤝', titleKey: 'home.gs_2_title', descKey: 'home.gs_2_desc', route: '/negotiate' },
+    { n: 3, emoji: '📦', titleKey: 'home.gs_3_title', descKey: 'home.gs_3_desc', route: '/pipeline' },
+    { n: 4, emoji: '📢', titleKey: 'home.gs_4_title', descKey: 'home.gs_4_desc', route: '/listing' },
+    { n: 5, emoji: '💶', titleKey: 'home.gs_5_title', descKey: 'home.gs_5_desc', route: '/dashboard' },
   ]
 
   return (
     <div className="page-container max-w-6xl mx-auto px-4 md:px-6">
-      
+
+      {/* Getting Started */}
+      {gsVisible && (
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-black text-white uppercase tracking-widest">{t('home.gs_title')}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">{t('home.gs_subtitle')}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('/howto')}
+              className="text-[10px] font-black text-blue-400 hover:underline uppercase tracking-widest px-2 py-1 rounded-lg hover:bg-blue-500/10 transition-colors"
+            >
+              {t('home.gs_read_guide')}
+            </button>
+            <button
+              onClick={hideGs}
+              className="p-1.5 rounded-lg text-slate-600 hover:text-slate-400 hover:bg-slate-800 transition-colors"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: 'none' }}>
+          {GS_STEPS.map((step) => (
+            <button
+              key={step.n}
+              onClick={() => navigate(step.route)}
+              className="flex-shrink-0 w-48 text-left p-4 rounded-2xl bg-surface-900/50 border border-slate-700/30 hover:border-slate-500/50 hover:bg-surface-800/50 transition-all group cursor-pointer"
+            >
+              <div className="text-3xl font-black text-slate-800 leading-none mb-2 select-none group-hover:text-slate-700 transition-colors">
+                {step.n}
+              </div>
+              <div className="text-2xl mb-2">{step.emoji}</div>
+              <div className="flex items-center gap-1 mb-1">
+                <span className="text-sm font-black text-white">{t(step.titleKey)}</span>
+                <ChevronRight className="w-3 h-3 text-slate-500 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">{t(step.descKey)}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+      )}
+
       {/* Quick Stats Overlay (Moved to top) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <div className="card p-5 border-slate-800 bg-surface-950/30">
-           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Active Deals</div>
+           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('home.active_deals')}</div>
            <div className="text-2xl font-black text-white">{stats.activeDeals || 0}</div>
         </div>
         <div className="card p-5 border-slate-800 bg-surface-950/30">
-           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Total Profit</div>
+           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('home.total_profit')}</div>
            <div className="text-2xl font-black text-emerald-400">{stats.totalProfit || 0}€</div>
         </div>
         <div className="card p-5 border-slate-800 bg-surface-950/30">
-           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Avg Margin</div>
+           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('home.avg_margin')}</div>
            <div className="text-2xl font-black text-blue-400">{stats.avgMargin || 0}%</div>
         </div>
         <div className={`card p-5 border-slate-800 bg-surface-950/30`}>
-           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Watching</div>
+           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{t('home.watching')}</div>
            <div className="text-2xl font-black text-amber-400">{pipeline?.deals?.filter(d => d.status === 'Watching')?.length || 0}</div>
         </div>
       </div>
@@ -129,18 +159,18 @@ export default function HomeView({ pipeline }) {
             
             <div className="relative z-10 max-w-xl">
               <h1 className="text-4xl md:text-5xl font-black text-white leading-tight mb-4">
-                Master the Art of <span className="bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">Flipping.</span>
+                {t('home.hero_title')} <span className="bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">{t('home.hero_title_highlight')}</span>
               </h1>
               <p className="text-lg text-slate-400 mb-8 leading-relaxed">
-                FlipOps provides the ultimate AI-powered toolkit to search, analyze, and negotiate your way to profit.
+                {t('home.hero_subtitle')}
               </p>
-              
+
               <div className="flex flex-wrap gap-4">
                 <Link to="/search" className="btn-primary px-8 py-3 text-sm font-black uppercase tracking-widest shadow-lg shadow-blue-500/20">
-                  Start Searching
+                  {t('home.start_searching')}
                 </Link>
                 <Link to="/pipeline" className="btn-secondary px-8 py-3 text-sm font-black uppercase tracking-widest border-slate-700">
-                  View Pipeline
+                  {t('home.view_pipeline')}
                 </Link>
               </div>
             </div>
@@ -153,10 +183,10 @@ export default function HomeView({ pipeline }) {
             <div className="flex items-center justify-between mb-4 px-2">
               <h2 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
                 <CalendarIcon className="w-4 h-4 text-blue-400" />
-                Next Events
+                {t('home.next_events')}
               </h2>
               <Link to="/appointments" className="text-[10px] font-bold text-blue-400 hover:underline px-2 py-1 rounded-lg hover:bg-blue-500/10">
-                See All
+                {t('home.see_all')}
               </Link>
             </div>
 
@@ -168,7 +198,7 @@ export default function HomeView({ pipeline }) {
               ) : appointments.length === 0 ? (
                 <div className="card p-6 text-center bg-surface-900/30 border-slate-800/50">
                   <CalendarIcon className="w-8 h-8 text-slate-800 mx-auto mb-2 opacity-50" />
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">No plans yet</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{t('home.no_plans')}</p>
                 </div>
               ) : (
                 appointments.map(app => {
@@ -226,7 +256,7 @@ export default function HomeView({ pipeline }) {
                 to="/appointments" 
                 className="block w-full text-center py-3 rounded-xl border border-dashed border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300 transition-all text-[10px] font-black uppercase tracking-widest"
               >
-                <Plus className="w-3 h-3 inline-block mr-1 -mt-0.5" /> Book Appointment
+                <Plus className="w-3 h-3 inline-block mr-1 -mt-0.5" /> {t('home.book_appointment')}
               </Link>
             </div>
           </div>
@@ -252,14 +282,14 @@ export default function HomeView({ pipeline }) {
                 </div>
                 
                 <span className="inline-block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                  {card.tag}
+                  {t(card.tagKey)}
                 </span>
                 <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                  {card.title}
+                  {t(card.titleKey)}
                   <ChevronRight className="w-4 h-4 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
                 </h3>
                 <p className="text-sm text-slate-400 leading-relaxed">
-                  {card.desc}
+                  {t(card.descKey)}
                 </p>
               </Link>
             ))}
@@ -268,6 +298,19 @@ export default function HomeView({ pipeline }) {
         </div>
 
       </div>
+
+      {/* Reopen Getting Started */}
+      {!gsVisible && (
+        <div className="mt-8 flex justify-center">
+          <button
+            onClick={showGs}
+            className="flex items-center gap-2 text-[10px] font-black text-slate-600 hover:text-slate-400 uppercase tracking-widest px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            {t('home.gs_title')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

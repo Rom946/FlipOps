@@ -138,3 +138,65 @@
 .animate-pulse-glow {
   animation: pulse-glow 2s infinite;
 }
+
+/* ===== MOBILE RESPONSIVENESS ===== */
+
+/* Table scroll wrapper */
+.table-scroll-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  border-radius: 0.75rem;
+}
+
+/* Bottom nav safe area */
+.main-content {
+  padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Stack-mobile button rows */
+@media (max-width: 480px) {
+  .stack-mobile {
+    flex-direction: column;
+    width: 100%;
+  }
+  .stack-mobile > button,
+  .stack-mobile > a {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Touch targets */
+  button, select, input, .toggle-switch {
+    min-height: 44px;
+  }
+
+  /* Modal fix */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-container {
+    width: min(92vw, 520px);
+    max-height: 90vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Page padding */
+  .page-container {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  /* Images safe */
+  img, video, iframe {
+    max-width: 100%;
+  }
+}

@@ -1,4 +1,27 @@
+# @flipops-map negotiate.py — updated 2026-03-15
+#
+# ROUTES:
+#   ANCHOR:route_analyze_listing — POST /api/analyze-listing
+#   ANCHOR:route_batch_analyze   — POST /api/batch-analyze
+#   ANCHOR:route_discussion      — POST /api/discussion/generate
+#
+# ANCHORS (analyze-listing):
+#   ANCHOR:key_resolver_import   — key_resolver import; resolve_api_key() call
+#   ANCHOR:analyze_prompt        — Claude prompt (f-string; product context + rules)
+#   ANCHOR:analyze_schema        — JSON schema block (Return ONLY JSON block)
+#   ANCHOR:analyze_parse         — response parsing (raw_content.find('{') + json.loads)
+#
+# ANCHORS (batch-analyze):
+#   ANCHOR:batch_analyze_entry   — route entry; items/key/lang setup; ALL items sent (no price filter)
+#   ANCHOR:batch_prompt          — batch scoring prompt (f-string, steps 1-4); max_tokens=4000
+#                                  null price → verdict:"investigate", score capped at 60, target_buy=0
+#                                  verdict options: buy|negotiate|pass|filtered|investigate
+#   ANCHOR:batch_raw_response    — raw response from Claude
+#   ANCHOR:batch_json_parse      — JSON extraction block
+#   ANCHOR:batch_response        — return jsonify(results)
+
 import os
+import re
 import json
 import time
 import anthropic
@@ -6,6 +29,27 @@ import httpx
 import traceback
 from flask import Blueprint, request, jsonify
 from services.auth import require_auth, get_db
+
+
+def extract_json_from_response(raw):
+    """Extract JSON array from Claude response, handling markdown fences and extra text."""
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    stripped = re.sub(r'```(?:json)?\s*', '', raw).strip()
+    try:
+        return json.loads(stripped)
+    except Exception:
+        pass
+    m = re.search(r'\[.*\]', stripped, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    raise ValueError("No valid JSON array found in response")
+# ANCHOR:key_resolver_import
 from services.key_resolver import resolve_api_key
 
 negotiate_bp = Blueprint("negotiate", __name__)
@@ -106,7 +150,8 @@ Return ONLY a JSON object with this exact structure:
     "flags": [],
     "risk_level": "low|medium|high"
   }},
-  "verdict": "buy|negotiate|pass"
+  "verdict": "buy|negotiate|pass",
+  "search_variants": []
 }}
 
 CRITICAL RULES:
@@ -126,7 +171,8 @@ CRITICAL RULES:
 14. price_trend: "dropping" if old model being replaced, "rising" if scarce or in demand, "stable" otherwise.
 15. time_to_sell_estimate: based on product demand and category liquidity.
 16. reasoning: 2-3 sentence summary explaining the deal quality, key risks, and why verdict was chosen. Write in {pref_lang}.
-17. All source fields should reference credible real websites (gsmarena.com, amazon.es, ebay.es, backmarket.es, etc.)"""
+17. All source fields should reference credible real websites (gsmarena.com, amazon.es, ebay.es, backmarket.es, etc.)
+18. search_variants: array of exactly 6 short search queries a buyer would use to find this product or similar alternatives on Wallapop. Mix: exact model, lower storage/spec variant, higher spec variant, previous generation, next generation, broader category search. Keep each under 5 words. Spanish or English based on the product name."""
 
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -140,6 +186,8 @@ CRITICAL RULES:
             start_idx = raw_content.find('{')
             end_idx = raw_content.rfind('}') + 1
             analysis_data = json.loads(raw_content[start_idx:end_idx])
+            if not isinstance(analysis_data.get('search_variants'), list):
+                analysis_data['search_variants'] = []
             return jsonify(analysis_data)
         except Exception as e:
             return jsonify({"error": "AI failed to return valid JSON", "details": str(e), "raw": message.content[0].text}), 502
@@ -158,6 +206,7 @@ CRITICAL RULES:
         traceback.print_exc()
         return jsonify({"error": f"Server error: {str(e)}", "traceback": traceback.format_exc()}), 500
 
+# ANCHOR:batch_analyze_entry
 @negotiate_bp.route("/api/batch-analyze", methods=["POST"])
 @require_auth
 def batch_analyze():
@@ -165,6 +214,7 @@ def batch_analyze():
         data = request.get_json() or {}
         items = data.get("items", [])
         print(f"DEBUG: batch_analyze hit. Items: {len(items)}")
+
         uid = request.user['uid']
         api_key, key_type = resolve_api_key(uid)
         
@@ -190,7 +240,7 @@ def batch_analyze():
 
         # Compact item list for prompt
         items_str = "\n".join([
-            f"- ID: {i.get('item_id')} | Title: {i.get('title')} | Price: {i.get('price')}€"
+            f"- ID: {i.get('item_id')} | Title: {i.get('title')} | Price: {str(i.get('price')) + '€' if i.get('price') else 'null'}"
             + (f" | Condition: {i.get('condition')}" if i.get('condition') else "")
             for i in items
         ])
@@ -198,6 +248,7 @@ def batch_analyze():
         custom_batch_instr = user_data.get('custom_batch_prompt', '').strip()
         custom_instructions_block = f"\nADDITIONAL INSTRUCTIONS FROM USER: {custom_batch_instr}\n" if custom_batch_instr else ""
 
+        # ANCHOR:batch_prompt
         prompt = f"""You are an expert second-hand product flipper in Spain with deep knowledge of Wallapop market prices, demand trends, and resale margins.{custom_instructions_block}
 
 The user is searching for: "{keywords}"
@@ -264,7 +315,7 @@ Return ONLY a valid JSON array. No extra text, no markdown, no code fences.
     "title": "...",
     "listed_price": 0,
     "score": 0,
-    "verdict": "buy|negotiate|pass|filtered",
+    "verdict": "buy|negotiate|pass|filtered|investigate",
     "target_buy": 0,
     "estimated_resell": 0,
     "net_profit": 0,
@@ -285,28 +336,30 @@ CRITICAL RULES:
 6. time_to_sell based on real Wallapop demand for this exact product model.
 7. Be conservative with estimated_resell — use realistic Wallapop prices, not eBay or Amazon prices.
 8. If listed_price is already at or below target_buy, set verdict to "buy" regardless of score threshold.
+9. If Price is null: score based on title and condition only. Cap score at 60. Set verdict to "investigate". Set listed_price, target_buy, net_profit to 0. Explain in reason that price was unavailable and buyer should check before proceeding.
 
-If the list is empty, return []."""
+If the list is empty, return [].
+
+CRITICAL: Respond with a valid JSON array ONLY. No text before or after. No markdown. No code fences. Start with [ and end with ]."""
 
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
+            max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
-        
+
+        # ANCHOR:batch_raw_response
         raw = message.content[0].text.strip()
-        
-        # Robust JSON extraction
+        print(f"[BATCH] Raw Claude response (first 300 chars): {raw[:300]}")
+
+        # ANCHOR:batch_json_parse
         try:
-            import json
-            start_idx = raw.find('[')
-            end_idx = raw.rfind(']') + 1
-            if start_idx == -1 or end_idx == 0:
-                raise ValueError("No JSON block found")
-            results = json.loads(raw[start_idx:end_idx])
+            results = extract_json_from_response(raw)
         except Exception as e:
+            print(f"[BATCH] JSON parse failed. Full raw:\n{raw}")
             return jsonify({"error": "AI failed to return batch JSON", "details": str(e), "raw": raw}), 502
 
+        # ANCHOR:batch_response
         return jsonify(results)
 
     except Exception as e:
