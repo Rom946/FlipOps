@@ -2,6 +2,18 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // SPA redirect: restore path from query string (set by 404.html)
+      (function() {
+        var p = window.location.search.match(/[?&]p=([^&]*)/);
+        if (p) {
+          var path = decodeURIComponent(p[1].replace(/~and~/g, '&'));
+          var q = window.location.search.match(/[?&]q=([^&]*)/);
+          var query = q ? '?' + decodeURIComponent(q[1].replace(/~and~/g, '&')) : '';
+          window.history.replaceState(null, null, '/FlipOps/' + path + query + window.location.hash);
+        }
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="flipops-icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="FlipOps — Wallapop flipping operations dashboard: search deals, negotiate, generate listings, and track your P&L." />
