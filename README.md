@@ -2,6 +2,8 @@
 
 > A full-stack Wallapop flipping operations dashboard — search deals, negotiate, generate listings, and track your P&L.
 
+**Live app**: [https://rom946.github.io/FlipOps/](https://rom946.github.io/FlipOps/)
+
 **Tech Stack**: React (Vite) + Tailwind CSS frontend · Python Flask backend · Anthropic Claude AI
 
 ---
