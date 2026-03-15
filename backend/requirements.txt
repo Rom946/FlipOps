@@ -1,0 +1,12 @@
+flask==3.0.3
+flask-cors==4.0.1
+anthropic==0.31.2
+requests==2.32.3
+python-dotenv==1.0.1
+gunicorn==22.0.0
+beautifulsoup4==4.12.3
+firebase-admin==6.5.0
+cryptography==42.0.5
+google-api-python-client==2.128.0
+google-auth==2.29.0
+curl_cffi==0.14.0

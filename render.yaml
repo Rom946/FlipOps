@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: flipops-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: FRONTEND_ORIGIN
+        sync: false   # Set manually in Render dashboard → your GitHub Pages URL
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SCRAPERAPI_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_UID
+        sync: false
+      # Firebase service account — paste the full JSON content as a Secret File
+      # in Render: Settings → Secret Files → /etc/secrets/firebase-adminsdk.json
+      # Then set this env var to point to it:
+      - key: FIREBASE_SERVICE_ACCOUNT_PATH
+        value: /etc/secrets/firebase-adminsdk.json
+      - key: FIREBASE_PROJECT_ID
+        sync: false

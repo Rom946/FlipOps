@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python app.py)",
+      "Bash(npm run:*)",
+      "Bash(venv/Scripts/python find_api.py)",
+      "Bash(venv/Scripts/python find_api2.py)",
+      "Bash(venv/Scripts/python find_api3.py)",
+      "Bash(venv/Scripts/python -c \":*)",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}
