@@ -6,6 +6,11 @@ Versioning: [semver](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-03-16
+### Added
+- `backend/services/scrapers/milanuncios.py`: `scrape_milanuncios_page(url, session)` — scrapes a Milanuncios category/search page and extracts individual listings; uses `_CARD_SELECTORS` + `_ITEM_ID_RE` (5+ digit numeric ID); supports 403/405 retry with chrome124; returns list in standard discovery format with `search_provider="category_scrape"`
+- `backend/routes/search.py`: after DDG `tagged_urls` collection, Milanuncios URLs without numeric listing ID suffix are separated into `_milan_category_pages`; after `scrape_step4`, up to 3 category pages are scraped via `scrape_milanuncios_page()` with 0.5s sleep between calls and results merged into listings; logs `[MILANUNCIOS] Scraped X listings from Y category pages`
+
 ## [0.17.0] - 2026-03-16
 ### Added
 - `backend/routes/admin.py`: `GET /api/admin/app-config` and `PATCH /api/admin/app-config` — reads/writes `config/app_settings` Firestore doc with `_DEFAULT_APP_CONFIG` fallback; PATCH accepts `{section, data}` and merges

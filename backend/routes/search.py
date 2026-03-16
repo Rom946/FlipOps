@@ -32,8 +32,10 @@
 #   ANCHOR:ddg_call            — DDG search call (impersonate=chrome120)
 #   ANCHOR:ddg_fallback        — non-wallapop zero-result fallback query
 #   ANCHOR:platform_parallel   — sequential loop over ddg_platforms (no ThreadPoolExecutor)
+#   ANCHOR:milanuncios_category_pages — collect milanuncios URLs without numeric ID suffix for separate scraping
 #   ANCHOR:url_dedup           — Step 3: normalize URL, strip query, lowercase
 #   ANCHOR:scrape_step4        — Step 4: scrape_item per URL (sequential) — calls module-level scrape_item
+#   ANCHOR:milanuncios_category_scrape — scrape collected category pages via scrape_milanuncios_page(); adds to listings
 #   ANCHOR:direct_api_merge    — Vinted/eBay direct API items merged into listings
 #   ANCHOR:location_filter     — Step 5: location filter (drops no coords/city)
 #   ANCHOR:platform_counts     — platform_counts assembly
@@ -1232,6 +1234,20 @@ def discover_listings():
                 for u in urls:
                     print(f"  [DDG URL] {u}")
 
+        # ANCHOR:milanuncios_category_pages
+        # Separate Milanuncios category pages (no numeric listing ID) from listing URLs
+        _milan_category_pages = []
+        _filtered_tagged = []
+        for _url, _plat in tagged_urls:
+            if _plat == "milanuncios" and not re.search(r'-\d{5,}\.htm', _url.lower()):
+                _milan_category_pages.append(_url)
+                print(f"[MILANUNCIOS] Category page collected: {_url[:80]}")
+            else:
+                _filtered_tagged.append((_url, _plat))
+        if _milan_category_pages:
+            print(f"[MILANUNCIOS] {len(_milan_category_pages)} category pages, {len(_filtered_tagged)} listing URLs kept")
+            tagged_urls = _filtered_tagged
+
         # ANCHOR:url_dedup
         # Step 3: Deduplicate by normalized URL (lowercase, strip trailing slash + query params)
         def _norm(u):
@@ -1267,6 +1283,22 @@ def discover_listings():
                     listings.append(result)
             except Exception as e:
                 print(f"[SCRAPE] Failed {url[:60]}: {e}")
+
+        # ANCHOR:milanuncios_category_scrape
+        # Scrape Milanuncios category pages collected during DDG — extract individual listings
+        if _milan_category_pages and time.time() <= deadline:
+            from services.scrapers.milanuncios import scrape_milanuncios_page
+            _cat_session = requests.Session()
+            _cat_scraped = 0
+            for _cat_url in _milan_category_pages[:3]:
+                try:
+                    _cat_items = scrape_milanuncios_page(_cat_url, _cat_session)
+                    listings.extend(_cat_items)
+                    _cat_scraped += len(_cat_items)
+                except Exception as _e:
+                    print(f"[MILANUNCIOS] Category scrape error: {_cat_url[:60]} — {_e}")
+                time.sleep(0.5)
+            print(f"[MILANUNCIOS] Scraped {_cat_scraped} listings from {min(len(_milan_category_pages), 3)} category pages")
 
         # ANCHOR:direct_api_merge
         # Merge direct API results (Vinted, eBay RSS) — bypass scraping

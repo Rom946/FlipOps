@@ -2,7 +2,7 @@
 
 Last updated: 2026-03-16
 
-## Current version: 0.17.0
+## Current version: 0.17.1
 ## Status: Active development
 
 ---
@@ -62,6 +62,7 @@ Last updated: 2026-03-16
 - **Multi-provider personal search keys** (complete): all backend + UI done including usage tracking and usage display UI.
 - **Discovery result quality** (complete v0.16.6): dead listing detection, Milanuncios URL fix, freshness filter, Scrapingdog priority, no-price items sent to AI with `investigate` verdict.
 - **Milanuncios direct scraper** (complete v0.16.7): bypasses Google for Milanuncios; direct HTML scrape with multi-selector fallback; falls back to Google if < 3 results.
+- **Milanuncios category page scraping** (complete v0.17.1): when DDG returns category pages (no numeric ID in URL), they are scraped via `scrape_milanuncios_page()` to extract individual listings instead of being dropped.
 
 ---
 
