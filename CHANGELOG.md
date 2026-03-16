@@ -6,6 +6,10 @@ Versioning: [semver](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.16.12] - 2026-03-16
+### Fixed
+- `frontend/index.html`: removed trailing slash from `/FlipOps/` in SPA redirect handler — 404.html encodes path as `?p=/discovery` (leading `/`), so base must be `/FlipOps` (no trailing slash) to avoid `/FlipOps//discovery` double-slash
+
 ## [0.16.11] - 2026-03-16
 ### Changed
 - `render.yaml`: gunicorn start command updated to `--workers 1 --threads 2 --timeout 60 --max-requests 100 --max-requests-jitter 10` — prevents memory leaks via periodic worker restart

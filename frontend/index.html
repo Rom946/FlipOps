@@ -10,7 +10,7 @@
           var path = decodeURIComponent(p[1].replace(/~and~/g, '&'));
           var q = window.location.search.match(/[?&]q=([^&]*)/);
           var query = q ? '?' + decodeURIComponent(q[1].replace(/~and~/g, '&')) : '';
-          window.history.replaceState(null, null, '/FlipOps/' + path + query + window.location.hash);
+          window.history.replaceState(null, null, '/FlipOps' + path + query + window.location.hash);
         }
       })();
     </script>

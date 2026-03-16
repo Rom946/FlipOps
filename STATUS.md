@@ -2,7 +2,7 @@
 
 Last updated: 2026-03-16
 
-## Current version: 0.16.11
+## Current version: 0.16.12
 ## Status: Active development
 
 ---
