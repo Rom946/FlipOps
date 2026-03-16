@@ -32,6 +32,11 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(appointments_bp)
 
 
+@app.route("/", methods=["GET", "HEAD"])
+def root():
+    return {"status": "ok", "service": "FlipOps API"}, 200
+
+
 @app.route("/api/health")
 def health():
     return {"status": "ok"}
