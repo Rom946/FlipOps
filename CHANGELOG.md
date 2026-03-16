@@ -6,6 +6,20 @@ Versioning: [semver](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.16.11] - 2026-03-16
+### Changed
+- `render.yaml`: gunicorn start command updated to `--workers 1 --threads 2 --timeout 60 --max-requests 100 --max-requests-jitter 10` — prevents memory leaks via periodic worker restart
+
+## [0.16.10] - 2026-03-16
+### Fixed
+- `backend/services/search_provider.py`: capped Phase 1 ThreadPoolExecutor to `MAX_CONCURRENT_SEARCHES=3` workers (was up to 20) to prevent SIGKILL on Render 512MB free tier
+- `backend/routes/search.py`: reduced Wallapop enrich workers 6→3; reduced scrape_step4 workers 8→3; added 25s global deadline — returns partial results with `timed_out: true` if exceeded, logs `[DISCOVERY] Timeout reached`
+- `render.yaml`: added `--timeout 60 --workers 1` to gunicorn start command
+
+## [0.16.9] - 2026-03-16
+### Fixed
+- `backend/services/scrapers/milanuncios.py`: switched from `requests` to `curl_cffi` (impersonate=chrome110) to fix 405 bot-detection blocks from Milanuncios; retry now uses `chrome124`; non-200 responses log first 300 chars of HTML for diagnosis
+
 ## [0.16.8] - 2026-03-15
 ### Changed
 - `backend/services/scrapers/milanuncios.py`: search param changed from `q=` to `s=`; added `orden=relevance` to query; switched to `requests.Session()` for cookie persistence; full browser-like headers replacing minimal headers (Chrome/122 UA, Sec-Fetch-*, Cache-Control, Accept-Encoding); added `_HEADERS_RETRY` with Linux Chrome UA; 403 now waits 2s and retries once with alternate UA before falling back to Google; 0-results path logs response status + first 500 chars of HTML; CSS selectors updated (`article.ma-AdCard` added as first candidate, `div[class*="adcard"]` replaces bare `[class*="adcard"]`); `item_id` extraction now requires match (skips card if no match instead of using filename fallback)

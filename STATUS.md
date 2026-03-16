@@ -1,8 +1,8 @@
 # FlipOps — Project Status
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
-## Current version: 0.16.8
+## Current version: 0.16.11
 ## Status: Active development
 
 ---
