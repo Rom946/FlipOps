@@ -1,7 +1,8 @@
-from flask import Flask
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+import traceback
 
 load_dotenv()
 
@@ -34,6 +35,19 @@ app.register_blueprint(appointments_bp)
 @app.route("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    origin = request.headers.get("Origin", "")
+    allowed = [o for o in ALLOWED_ORIGINS if o]
+    tb = traceback.format_exc()
+    print(f"[ERROR] Unhandled exception: {e}\n{tb}")
+    resp = jsonify({"error": str(e), "traceback": tb})
+    resp.status_code = 500
+    if origin in allowed:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+    return resp
 
 
 if __name__ == "__main__":
