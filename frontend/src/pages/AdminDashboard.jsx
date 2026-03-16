@@ -67,10 +67,12 @@
  *   - Keyword Variants tab:          L1585
  *   - Search Providers tab:          L1723
  *   - Infrastructure tab (admin):    L1856
+ *   - App Settings tab (admin):      after Infrastructure — appConfig state + handleSaveAppConfig
+ *     4 collapsible sections: discovery / providers (priority order + toggles) / ai / negotiation
  *
  * ANCHORS:
  *   - Where to add new user-facing section:  L1854 (after providers, before master)
- *   - Where to add new admin-only section:   L1904 (after master, before </main>)
+ *   - Where to add new admin-only section:   after App Settings tab JSX closing }
  *   - authFetch helper:             L320
  *   - refreshUserProfile:           L338
  *   - Usage stats (providers map):  L1744–L1789
@@ -194,6 +196,11 @@ export default function AdminDashboard({ pipeline }) {
   const [changingKey, setChangingKey] = useState({})
   const [searchUsage, setSearchUsage] = useState({})
   const [usageLoading, setUsageLoading] = useState(false)
+  const [appConfig, setAppConfig] = useState(null)
+  const [appConfigLoading, setAppConfigLoading] = useState(false)
+  const [appConfigSaving, setAppConfigSaving] = useState(null)
+  const [appConfigSuccess, setAppConfigSuccess] = useState(null)
+  const [appOpenSections, setAppOpenSections] = useState({ discovery: true, providers: true, ai: true, negotiation: true })
 
   useEffect(() => {
     fetchData()
@@ -252,6 +259,14 @@ export default function AdminDashboard({ pipeline }) {
     api.getKeywordVariants()
       .then(data => { setKwVariants(data); setKwLoading(false) })
       .catch(() => setKwLoading(false))
+  }, [activeTab])
+
+  useEffect(() => {
+    if (activeTab !== 'appsettings' || appConfig || appConfigLoading) return
+    setAppConfigLoading(true)
+    api.getAppConfig()
+      .then(data => { setAppConfig(data); setAppConfigLoading(false) })
+      .catch(() => setAppConfigLoading(false))
   }, [activeTab])
 
   useEffect(() => {
@@ -485,6 +500,20 @@ export default function AdminDashboard({ pipeline }) {
   )
 
 
+  const handleSaveAppConfig = async (section) => {
+    if (!appConfig) return
+    setAppConfigSaving(section)
+    try {
+      await api.updateAppConfig(section, appConfig[section])
+      setAppConfigSuccess(section)
+      setTimeout(() => setAppConfigSuccess(null), 3000)
+    } catch (e) {
+      console.error('App config save failed:', e)
+    } finally {
+      setAppConfigSaving(null)
+    }
+  }
+
   const navItems = [
     { id: 'profile', label: 'Profile & Security', icon: Key },
     { id: 'locations', label: 'My Locations', icon: MapPin },
@@ -496,7 +525,8 @@ export default function AdminDashboard({ pipeline }) {
       { id: 'stats', label: 'System Health', icon: Activity },
       { id: 'preauth', label: 'Pre-authorized', icon: Mail },
       { id: 'users', label: 'User Controls', icon: UserCog },
-      { id: 'master', label: 'Infrastructure', icon: ShieldCheck }
+      { id: 'master', label: 'Infrastructure', icon: ShieldCheck },
+      { id: 'appsettings', label: 'App Settings', icon: SettingsIcon }
     ] : [])
   ]
 
@@ -1902,6 +1932,166 @@ Return ONLY valid JSON:
               </div>
             </div>
           </div>
+      )}
+
+      {activeTab === 'appsettings' && isAdmin && (
+        <div>
+          <div className="section-header mb-2">
+            <h2 className="text-xl font-black text-slate-100">App Settings</h2>
+            <p className="text-sm text-slate-400 mt-1">Configure app behavior without redeploying</p>
+          </div>
+          <p className="text-xs text-slate-500 mb-6 italic">Changes take effect within 60 seconds (cache refresh interval)</p>
+
+          {appConfigLoading && <div className="flex justify-center py-12"><span className="spinner w-8 h-8" /></div>}
+
+          {appConfig && (
+            <div className="space-y-4">
+
+              {/* Discovery */}
+              <div className="card p-0 overflow-hidden">
+                <button className="w-full flex items-center justify-between p-5 text-left" onClick={() => setAppOpenSections(s => ({ ...s, discovery: !s.discovery }))}>
+                  <span className="text-sm font-bold text-slate-100">Discovery</span>
+                  {appOpenSections.discovery ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                </button>
+                {appOpenSections.discovery && (
+                  <div className="px-5 pb-5 border-t border-slate-800 pt-4 space-y-3">
+                    {[
+                      { key: 'maxVariants', label: 'Max variants', min: 1, max: 10 },
+                      { key: 'maxPlatforms', label: 'Max platforms', min: 1, max: 4 },
+                      { key: 'timeBudget', label: 'Time budget (seconds)', min: 10, max: 120 },
+                      { key: 'maxUrlsToEnrich', label: 'Max URLs to enrich', min: 1, max: 20 },
+                      { key: 'freshnessDays', label: 'Freshness filter (days)', min: 1, max: 90 },
+                      { key: 'minResultsBeforeFallback', label: 'Min results before fallback', min: 1, max: 10 },
+                    ].map(({ key, label, min, max }) => (
+                      <div key={key} className="flex items-center justify-between gap-4">
+                        <label className="label text-xs">{label}</label>
+                        <input type="number" min={min} max={max}
+                          value={appConfig.discovery[key] ?? ''}
+                          onChange={e => setAppConfig(c => ({ ...c, discovery: { ...c.discovery, [key]: Number(e.target.value) } }))}
+                          className="input w-24 text-right" />
+                      </div>
+                    ))}
+                    <button className="btn btn-primary w-full mt-1" onClick={() => handleSaveAppConfig('discovery')} disabled={appConfigSaving === 'discovery'}>
+                      {appConfigSaving === 'discovery' ? <span className="spinner w-4 h-4" /> : appConfigSuccess === 'discovery' ? '✓ Saved' : 'Save section'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Providers */}
+              <div className="card p-0 overflow-hidden">
+                <button className="w-full flex items-center justify-between p-5 text-left" onClick={() => setAppOpenSections(s => ({ ...s, providers: !s.providers }))}>
+                  <span className="text-sm font-bold text-slate-100">Providers</span>
+                  {appOpenSections.providers ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                </button>
+                {appOpenSections.providers && (
+                  <div className="px-5 pb-5 border-t border-slate-800 pt-4 space-y-3">
+                    <div>
+                      <div className="label text-xs mb-2">Priority order</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {(appConfig.providers.priorityOrder || []).map((p, i, arr) => (
+                          <div key={p} className="flex items-center gap-1 bg-slate-800 rounded-lg px-3 py-1.5">
+                            <span className="text-xs font-bold text-slate-300">{p}</span>
+                            <button className="text-slate-500 hover:text-slate-200 disabled:opacity-30 ml-1" disabled={i === 0}
+                              onClick={() => { const a = [...arr]; [a[i-1], a[i]] = [a[i], a[i-1]]; setAppConfig(c => ({ ...c, providers: { ...c.providers, priorityOrder: a } })) }}>←</button>
+                            <button className="text-slate-500 hover:text-slate-200 disabled:opacity-30" disabled={i === arr.length - 1}
+                              onClick={() => { const a = [...arr]; [a[i], a[i+1]] = [a[i+1], a[i]]; setAppConfig(c => ({ ...c, providers: { ...c.providers, priorityOrder: a } })) }}>→</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    {[
+                      { key: 'serperEnabled', label: 'Serper enabled' },
+                      { key: 'serpApiEnabled', label: 'SerpAPI enabled' },
+                      { key: 'scrapingdogEnabled', label: 'Scrapingdog enabled' },
+                    ].map(({ key, label }) => (
+                      <div key={key} className="flex items-center justify-between">
+                        <span className="label text-xs">{label}</span>
+                        <button onClick={() => setAppConfig(c => ({ ...c, providers: { ...c.providers, [key]: !c.providers[key] } }))}
+                          className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${appConfig.providers[key] ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+                          <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${appConfig.providers[key] ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+                    ))}
+                    <button className="btn btn-primary w-full mt-1" onClick={() => handleSaveAppConfig('providers')} disabled={appConfigSaving === 'providers'}>
+                      {appConfigSaving === 'providers' ? <span className="spinner w-4 h-4" /> : appConfigSuccess === 'providers' ? '✓ Saved' : 'Save section'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* AI */}
+              <div className="card p-0 overflow-hidden">
+                <button className="w-full flex items-center justify-between p-5 text-left" onClick={() => setAppOpenSections(s => ({ ...s, ai: !s.ai }))}>
+                  <span className="text-sm font-bold text-slate-100">AI</span>
+                  {appOpenSections.ai ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                </button>
+                {appOpenSections.ai && (
+                  <div className="px-5 pb-5 border-t border-slate-800 pt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="label text-xs">Model</label>
+                      <select value={appConfig.ai.model} onChange={e => setAppConfig(c => ({ ...c, ai: { ...c.ai, model: e.target.value } }))} className="input w-auto text-xs">
+                        <option value="claude-haiku-4-5-20251001">Haiku (cheapest)</option>
+                        <option value="claude-sonnet-4-20250514">Sonnet (balanced)</option>
+                        <option value="claude-opus-4-5">Opus (most capable)</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="label text-xs">Max tokens</label>
+                      <input type="number" min={500} max={4000} value={appConfig.ai.maxTokens ?? ''}
+                        onChange={e => setAppConfig(c => ({ ...c, ai: { ...c.ai, maxTokens: Number(e.target.value) } }))} className="input w-24 text-right" />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between gap-4">
+                        <label className="label text-xs">Min score to show</label>
+                        <input type="number" min={0} max={100} value={appConfig.ai.minScoreToShow ?? ''}
+                          onChange={e => setAppConfig(c => ({ ...c, ai: { ...c.ai, minScoreToShow: Number(e.target.value) } }))} className="input w-24 text-right" />
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">Results below this score are hidden</p>
+                    </div>
+                    <button className="btn btn-primary w-full mt-1" onClick={() => handleSaveAppConfig('ai')} disabled={appConfigSaving === 'ai'}>
+                      {appConfigSaving === 'ai' ? <span className="spinner w-4 h-4" /> : appConfigSuccess === 'ai' ? '✓ Saved' : 'Save section'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Negotiation defaults */}
+              <div className="card p-0 overflow-hidden">
+                <button className="w-full flex items-center justify-between p-5 text-left" onClick={() => setAppOpenSections(s => ({ ...s, negotiation: !s.negotiation }))}>
+                  <span className="text-sm font-bold text-slate-100">Negotiation defaults</span>
+                  {appOpenSections.negotiation ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+                </button>
+                {appOpenSections.negotiation && (
+                  <div className="px-5 pb-5 border-t border-slate-800 pt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="label text-xs">Target margin %</label>
+                      <input type="number" value={appConfig.negotiation.targetMarginPct ?? ''}
+                        onChange={e => setAppConfig(c => ({ ...c, negotiation: { ...c.negotiation, targetMarginPct: Number(e.target.value) } }))} className="input w-24 text-right" />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="label text-xs">Platform fee %</label>
+                      <input type="number" value={appConfig.negotiation.platformFeePct ?? ''}
+                        onChange={e => setAppConfig(c => ({ ...c, negotiation: { ...c.negotiation, platformFeePct: Number(e.target.value) } }))} className="input w-24 text-right" />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="label text-xs">Default tone</label>
+                      <select value={appConfig.negotiation.defaultTone} onChange={e => setAppConfig(c => ({ ...c, negotiation: { ...c.negotiation, defaultTone: e.target.value } }))} className="input w-auto text-xs">
+                        <option value="friendly">Friendly</option>
+                        <option value="firm">Firm</option>
+                        <option value="curious">Curious</option>
+                      </select>
+                    </div>
+                    <button className="btn btn-primary w-full mt-1" onClick={() => handleSaveAppConfig('negotiation')} disabled={appConfigSaving === 'negotiation'}>
+                      {appConfigSaving === 'negotiation' ? <span className="spinner w-4 h-4" /> : appConfigSuccess === 'negotiation' ? '✓ Saved' : 'Save section'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+            </div>
+          )}
+        </div>
       )}
     </main>
   </div>

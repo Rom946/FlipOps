@@ -106,6 +106,11 @@ export function useApi() {
       method: 'POST',
       body: JSON.stringify({ api_key })
     }),
+    getAppConfig: () => apiFetch('/api/admin/app-config'),
+    updateAppConfig: (section, data) => apiFetch('/api/admin/app-config', {
+      method: 'PATCH',
+      body: JSON.stringify({ section, data })
+    }),
     
     updatePlatformPreference: (platform, enabled) => apiFetch('/api/user/platform-preferences', {
       method: 'PATCH',

@@ -6,6 +6,26 @@ Versioning: [semver](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-03-16
+### Added
+- `backend/routes/admin.py`: `GET /api/admin/app-config` and `PATCH /api/admin/app-config` — reads/writes `config/app_settings` Firestore doc with `_DEFAULT_APP_CONFIG` fallback; PATCH accepts `{section, data}` and merges
+- `frontend/src/hooks/useApi.js`: `getAppConfig()` and `updateAppConfig(section, data)` methods
+- `frontend/src/pages/AdminDashboard.jsx`: "App Settings" admin tab — 4 collapsible sections (Discovery, Providers, AI, Negotiation defaults); per-section Save button with spinner + success state; provider priority reorder with ←/→ buttons; provider enable/disable toggles; lazy-loads on tab activation
+
+## [0.16.15] - 2026-03-16
+### Fixed
+- `backend/routes/search.py`: added `CITY_COORDINATES` dict for 7 Spanish cities; both `/api/geocoder` and `discover_listings()` now check hardcoded coords before calling Photon/Nominatim — fixes Barcelona returning Brazilian coordinates (lat=-5.95, lon=-35.92)
+
+## [0.16.14] - 2026-03-16
+### Changed
+- `backend/services/search_provider.py`: variants capped 3→2; platforms capped at 2; Phase 1 now tries only highest-priority provider per query, falls back to second only on 0 results within budget; 25s time budget with `[DISCOVERY] Time budget exceeded` early exit; start/completion logs added
+- `backend/routes/search.py`: enrich cap 8→6; removed unused `os` and `get_db` imports
+
+## [0.16.13] - 2026-03-16
+### Changed
+- `backend/services/search_provider.py`: removed all ThreadPoolExecutor/parallel execution — Phase 1 (serper+serpapi) now runs sequentially with 0.5s sleep between calls; keyword variants capped at 3 (was 5); logs `[SEARCH] Processing 3/X variants (capped for memory)`
+- `backend/routes/search.py`: replaced all three ThreadPoolExecutor blocks with sequential loops — enrich step capped at 8 URLs with 0.3s sleep; scrape_step4 sequential; DDG platform loop sequential; `gc.collect()` called at request entry
+
 ## [0.16.12] - 2026-03-16
 ### Fixed
 - `frontend/index.html`: removed trailing slash from `/FlipOps/` in SPA redirect handler — 404.html encodes path as `?p=/discovery` (leading `/`), so base must be `/FlipOps` (no trailing slash) to avoid `/FlipOps//discovery` double-slash

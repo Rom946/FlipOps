@@ -113,6 +113,48 @@ def delete_preauthorized(doc_id):
     db.collection('preauthorized_emails').document(doc_id).delete()
     return jsonify({"success": True})
 
+_DEFAULT_APP_CONFIG = {
+    "discovery": {
+        "maxVariants": 2, "maxPlatforms": 2, "timeBudget": 25,
+        "maxUrlsToEnrich": 6, "freshnessDays": 14, "minResultsBeforeFallback": 3,
+    },
+    "providers": {
+        "priorityOrder": ["serper", "serpapi", "scrapingdog"],
+        "serperEnabled": True, "serpApiEnabled": True, "scrapingdogEnabled": True,
+    },
+    "ai": {
+        "model": "claude-haiku-4-5-20251001", "maxTokens": 1024, "minScoreToShow": 0,
+    },
+    "negotiation": {
+        "targetMarginPct": 20, "platformFeePct": 5, "defaultTone": "friendly",
+    },
+}
+
+@admin_bp.route("/api/admin/app-config", methods=["GET"])
+@require_admin
+def get_app_config():
+    db = get_db()
+    doc = db.collection('config').document('app_settings').get()
+    config = {k: dict(v) for k, v in _DEFAULT_APP_CONFIG.items()}
+    if doc.exists:
+        stored = doc.to_dict() or {}
+        for section in config:
+            if section in stored and isinstance(stored[section], dict):
+                config[section] = {**config[section], **stored[section]}
+    return jsonify(config)
+
+@admin_bp.route("/api/admin/app-config", methods=["PATCH"])
+@require_admin
+def update_app_config():
+    db = get_db()
+    data = request.json or {}
+    section = data.get('section')
+    payload = data.get('data', {})
+    if not section or section not in _DEFAULT_APP_CONFIG:
+        return jsonify({"error": "Invalid section"}), 400
+    db.collection('config').document('app_settings').set({section: payload}, merge=True)
+    return jsonify({"success": True})
+
 @admin_bp.route("/api/admin/stats", methods=["GET"])
 @require_admin
 def get_system_stats():

@@ -13,7 +13,8 @@
 #   ANCHOR:search_serper                — search_serper(query, num, api_key, platforms, location) — includes `date` field
 #   ANCHOR:keyword_split                — split_keywords(keywords) — splits comma-sep variants, max 5, for per-variant search
 #   ANCHOR:search_with_personal_keys    — per-platform per-variant search (query, num, uid, platforms, location)
-#           Firestore lookup → decrypt keys → split_keywords → Phase 1: serper+serpapi parallel
+#           Firestore lookup → decrypt keys → split_keywords (capped at 3 variants) →
+#           Phase 1: serper+serpapi sequential (0.5s sleep between calls)
 #           → Phase 2: scrapingdog sequential (1.5s delay, only where phase1 got <3 results per platform/variant)
 #           → dedup + cap MAX_PER_PLATFORM=10; skips vinted/ebay_es (use native APIs)
 # ANCHORS:
@@ -30,7 +31,6 @@ import os
 import time
 import threading
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from firebase_admin import firestore
 from services.encryption import decrypt_key
 from services.usage_tracker import increment_usage
@@ -86,6 +86,9 @@ def _detect_platform(url: str) -> str:
 # Platforms served by search providers (Google-based).
 # vinted and ebay_es use native APIs and are excluded from search provider queries.
 SEARCH_PROVIDER_PLATFORMS = ["wallapop", "milanuncios"]
+
+# Max concurrent provider requests — keeps RAM within Render free tier (512MB)
+MAX_CONCURRENT_SEARCHES = 3
 
 # ANCHOR:platform_domains
 # Used by build_scoped_query() as fallback; only covers search-provider platforms.
@@ -326,7 +329,7 @@ def search_with_personal_keys(query: str, num_results: int, uid: str, platforms:
 
     # ANCHOR:personal_keys_platform_skip
     # Filter to only search-provider-supported platforms; others use native APIs
-    provider_platforms = [p for p in active_platforms if p in SEARCH_PROVIDER_PLATFORMS]
+    provider_platforms = [p for p in active_platforms if p in SEARCH_PROVIDER_PLATFORMS][:2]
     skipped = [p for p in active_platforms if p not in SEARCH_PROVIDER_PLATFORMS]
     for p in skipped:
         print(f"[PERSONAL KEYS] Skipping {p} — uses native API (vinted→REST, ebay_es→RSS)")
@@ -335,23 +338,30 @@ def search_with_personal_keys(query: str, num_results: int, uid: str, platforms:
 
     per_platform = max(2, num_results // len(provider_platforms))
 
-    variants = split_keywords(query)
+    _all_variants = split_keywords(query)
+    variants = _all_variants[:2]
+    if len(_all_variants) > 2:
+        print(f"[SEARCH] Processing 2/{len(_all_variants)} variants (capped for memory)")
     print(f"[PERSONAL KEYS] Split into {len(variants)} variants: {variants}")
     MAX_PER_PLATFORM = 10
 
     all_results = []
     # ANCHOR:personal_keys_per_platform
-    # Phase 1: Serper + SerpAPI in parallel (priority providers)
-    # Phase 2: Scrapingdog sequential with 1.5s delay, only for (platform, variant) pairs
-    #          where priority providers returned < 3 results
+    # Per (platform, variant): try highest-priority provider only.
+    # Fall back to second provider only if first got 0 results AND time budget allows.
+    # Scrapingdog Phase 2: sequential, only where priority got < 3 results.
+    # Hard limits: 2 variants, 2 platforms, 25s budget.
     platform_seen: dict = {}
     platform_count: dict = {}
-    # Track result count per (platform, variant) from priority providers
     priority_counts: dict = {}
     providers_used: set = set()
 
     priority_providers = [p for p in ["serper", "serpapi"] if p in personal_enabled]
     scrapingdog_enabled = "scrapingdog" in personal_enabled
+
+    _budget = 25
+    _search_start = time.time()
+    print(f"[DISCOVERY] Starting with {len(variants)} variants, {len(provider_platforms)} platforms, budget={_budget}s")
 
     def _collect_results(provider_results, p, platform, variant):
         key = (platform, variant)
@@ -373,34 +383,51 @@ def search_with_personal_keys(query: str, num_results: int, uid: str, platforms:
             threading.Thread(target=increment_usage, args=(uid, p), daemon=True).start()
 
     if priority_providers:
-        with ThreadPoolExecutor(max_workers=min(len(provider_platforms) * len(priority_providers) * len(variants), 20)) as executor:
-            futures = {}
-            for platform in provider_platforms:
-                for variant in variants:
-                    variant_query = build_platform_query(variant, platform, location)
-                    print(f"[PERSONAL KEYS] Variant query for {platform}: {variant_query[:80]}")
-                    for p in priority_providers:
-                        fut = executor.submit(
-                            funcs[p],
-                            variant_query,
-                            per_platform,
-                            decrypt_key(sp[p]["apiKey"]),
-                            [],
-                            None,
-                        )
-                        futures[fut] = (p, platform, variant)
-            for future in as_completed(futures):
-                p, platform, variant = futures[future]
+        _timed_out = False
+        for platform in provider_platforms:
+            if _timed_out:
+                break
+            for variant in variants:
+                if time.time() - _search_start > _budget:
+                    print(f"[DISCOVERY] Time budget exceeded, stopping search early")
+                    _timed_out = True
+                    break
+                variant_query = build_platform_query(variant, platform, location)
+                print(f"[PERSONAL KEYS] Variant query for {platform}: {variant_query[:80]}")
+                # Try only highest-priority provider
+                first_p = priority_providers[0]
+                got_results = 0
                 try:
-                    provider_results = future.result(timeout=65)
-                    print(f"[SEARCH_PROVIDER] {p} for {platform}/{variant!r}: {len(provider_results)} results")
-                    _collect_results(provider_results, p, platform, variant)
+                    provider_results = funcs[first_p](
+                        variant_query, per_platform,
+                        decrypt_key(sp[first_p]["apiKey"]), [], None,
+                    )
+                    print(f"[SEARCH_PROVIDER] {first_p} for {platform}/{variant!r}: {len(provider_results)} results")
+                    _collect_results(provider_results, first_p, platform, variant)
+                    got_results = len(provider_results)
                 except Exception as e:
-                    print(f"[search_provider] {p} for {platform}/{variant!r} failed: {e}")
+                    print(f"[search_provider] {first_p} for {platform}/{variant!r} failed: {e}")
+                time.sleep(0.5)
+                # Fall back to second provider only if 0 results AND budget allows
+                if got_results == 0 and len(priority_providers) > 1 and time.time() - _search_start <= _budget:
+                    second_p = priority_providers[1]
+                    try:
+                        provider_results = funcs[second_p](
+                            variant_query, per_platform,
+                            decrypt_key(sp[second_p]["apiKey"]), [], None,
+                        )
+                        print(f"[SEARCH_PROVIDER] {second_p} fallback for {platform}/{variant!r}: {len(provider_results)} results")
+                        _collect_results(provider_results, second_p, platform, variant)
+                    except Exception as e:
+                        print(f"[search_provider] {second_p} for {platform}/{variant!r} failed: {e}")
+                    time.sleep(0.5)
 
     if scrapingdog_enabled:
         for platform in provider_platforms:
             for variant in variants:
+                if time.time() - _search_start > _budget:
+                    print(f"[DISCOVERY] Time budget exceeded, stopping search early")
+                    break
                 key = (platform, variant)
                 if priority_counts.get(key, 0) >= 3:
                     print(f"[SCRAPINGDOG] Skipping {platform}/{variant!r} — priority providers got {priority_counts[key]} results")
@@ -409,11 +436,8 @@ def search_with_personal_keys(query: str, num_results: int, uid: str, platforms:
                 print(f"[SCRAPINGDOG] Running for {platform}/{variant!r} (priority got {priority_counts.get(key, 0)} results)")
                 try:
                     provider_results = funcs["scrapingdog"](
-                        variant_query,
-                        per_platform,
-                        decrypt_key(sp["scrapingdog"]["apiKey"]),
-                        [],
-                        None,
+                        variant_query, per_platform,
+                        decrypt_key(sp["scrapingdog"]["apiKey"]), [], None,
                     )
                     print(f"[SEARCH_PROVIDER] scrapingdog for {platform}/{variant!r}: {len(provider_results)} results")
                     _collect_results(provider_results, "scrapingdog", platform, variant)
@@ -434,6 +458,7 @@ def search_with_personal_keys(query: str, num_results: int, uid: str, platforms:
             deduped.append(r)
 
     # ANCHOR:personal_keys_dedup_log
+    print(f"[DISCOVERY] Completed in {time.time() - _search_start:.1f}s, {len(deduped)} results")
     print(f"[PERSONAL KEYS] Total results after merge: {len(deduped)} (from {len(all_results)} before dedup)")
     for r in deduped:
         print(f"  [MERGED URL] {r.get('url', 'MISSING')[:80]} | platform: {r.get('platform', 'MISSING')}")

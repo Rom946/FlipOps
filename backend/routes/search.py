@@ -27,13 +27,13 @@
 #   ANCHOR:personal_keys_check — uid extraction only (personal key logic moved inside try)
 #   ANCHOR:direct_api_always   — Step 2a: Vinted API + eBay RSS + Milanuncios direct scrape; skip_provider_platforms tracks platforms already served
 #   ANCHOR:provider_search     — Step 2b: personal keys for wallapop+milanuncios (minus skip_provider_platforms); merges direct+provider
-#   ANCHOR:enrich_personal_results — Step 2b+: scrape Wallapop pages with no price (6 workers, 15s timeout)
+#   ANCHOR:enrich_personal_results — Step 2b+: scrape Wallapop pages with no price (sequential, capped 8 URLs, 0.3s sleep)
 #   ANCHOR:fn_ddg_collect      — _ddg_collect closure definition
 #   ANCHOR:ddg_call            — DDG search call (impersonate=chrome120)
 #   ANCHOR:ddg_fallback        — non-wallapop zero-result fallback query
-#   ANCHOR:platform_parallel   — ThreadPoolExecutor over ddg_platforms
+#   ANCHOR:platform_parallel   — sequential loop over ddg_platforms (no ThreadPoolExecutor)
 #   ANCHOR:url_dedup           — Step 3: normalize URL, strip query, lowercase
-#   ANCHOR:scrape_step4        — Step 4: scrape_item per URL (8 workers) — calls module-level scrape_item
+#   ANCHOR:scrape_step4        — Step 4: scrape_item per URL (sequential) — calls module-level scrape_item
 #   ANCHOR:direct_api_merge    — Vinted/eBay direct API items merged into listings
 #   ANCHOR:location_filter     — Step 5: location filter (drops no coords/city)
 #   ANCHOR:platform_counts     — platform_counts assembly
@@ -88,13 +88,12 @@
 #   location filter → drops no coords/city
 #   platform_counts → response
 
-import os
 import re
 import json
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 from flask import Blueprint, request, jsonify
-from services.auth import require_auth, get_db
+from services.auth import require_auth
 import math
 import time
 from datetime import datetime, timedelta
@@ -102,6 +101,17 @@ from datetime import datetime, timedelta
 # Simple in-memory cache for geocoding results
 GEO_CACHE = {}
 CACHE_TTL = 3600 # 1 hour
+
+# Hardcoded coordinates for common Spanish cities — bypass unreliable geocoding APIs
+CITY_COORDINATES = {
+    "barcelona":  (41.3851,  2.1734),
+    "madrid":     (40.4168, -3.7038),
+    "valencia":   (39.4699, -0.3763),
+    "sevilla":    (37.3891, -5.9845),
+    "bilbao":     (43.2630, -2.9350),
+    "zaragoza":   (41.6488, -0.8891),
+    "malaga":     (36.7213, -4.4213),
+}
 
 # Haversine formula to calculate distance between two points in km
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -568,13 +578,22 @@ def geocode():
     if not query or len(query) < 3:
         return jsonify([]), 400
         
+    # Hardcoded lookup for known Spanish cities
+    city_lower = query.lower().strip()
+    if city_lower in CITY_COORDINATES:
+        lat, lon = CITY_COORDINATES[city_lower]
+        print(f"[GEO] Using hardcoded coords for {query}: {lat}, {lon}")
+        result = [{"display_name": query, "lat": str(lat), "lon": str(lon), "address": query}]
+        GEO_CACHE[query] = (result, time.time() + CACHE_TTL)
+        return jsonify(result)
+
     # Check cache
     now = time.time()
     if query in GEO_CACHE:
         entry, expiry = GEO_CACHE[query]
         if now < expiry:
             return jsonify(entry)
-            
+
     try:
         # Try Photon (Komoot) - Much more lenient for search-as-you-type
         photon_url = f"https://photon.komoot.io/api/?q={query}&limit=5"
@@ -840,9 +859,10 @@ def import_url():
 @require_auth
 def discover_listings():
     import re
+    import gc
     import time
     from urllib.parse import unquote, urlparse, urlunparse
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    gc.collect()
 
     req_data = request.json or {}
     keywords = req_data.get("keywords", "").strip()
@@ -850,6 +870,7 @@ def discover_listings():
     page = req_data.get("page", 1)
     platforms = req_data.get("platforms", ["wallapop"])
     offset = (page - 1) * 30
+    deadline = time.time() + 25  # Global 25s timeout — return partial results if exceeded
 
     if not keywords:
         return jsonify({"error": "Keywords are required"}), 400
@@ -869,20 +890,25 @@ def discover_listings():
         # Step 1: Geocode location
         loc_lat, loc_lon = None, None
         if location:
-            try:
-                geo_resp = requests.get(
-                    f"https://photon.komoot.io/api/?q={location}&limit=1",
-                    timeout=5
-                )
-                if geo_resp.status_code == 200:
-                    feats = geo_resp.json().get("features", [])
-                    if feats:
-                        coords = feats[0].get("geometry", {}).get("coordinates", [])
-                        if len(coords) >= 2:
-                            loc_lon, loc_lat = float(coords[0]), float(coords[1])
-                            print(f"DEBUG: Geocoded '{location}' → lat={loc_lat}, lon={loc_lon}")
-            except Exception as e:
-                print(f"DEBUG: Location geocoding failed: {e}")
+            city_lower = location.lower().strip()
+            if city_lower in CITY_COORDINATES:
+                loc_lat, loc_lon = CITY_COORDINATES[city_lower]
+                print(f"[GEO] Using hardcoded coords for {location}: {loc_lat}, {loc_lon}")
+            else:
+                try:
+                    geo_resp = requests.get(
+                        f"https://photon.komoot.io/api/?q={location}&limit=1",
+                        timeout=5
+                    )
+                    if geo_resp.status_code == 200:
+                        feats = geo_resp.json().get("features", [])
+                        if feats:
+                            coords = feats[0].get("geometry", {}).get("coordinates", [])
+                            if len(coords) >= 2:
+                                loc_lon, loc_lat = float(coords[0]), float(coords[1])
+                                print(f"DEBUG: Geocoded '{location}' → lat={loc_lat}, lon={loc_lon}")
+                except Exception as e:
+                    print(f"DEBUG: Location geocoding failed: {e}")
 
         # ANCHOR:direct_api_always
         # Step 2a: Always run native APIs first (Vinted + eBay + Milanuncios direct), regardless of personal key status
@@ -969,43 +995,44 @@ def discover_listings():
             ]
             dead_urls = set()
             if items_to_enrich:
-                print(f"[ENRICH] Scraping {len(items_to_enrich)} Wallapop pages for price data")
-                from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
-                with _TPE(max_workers=6) as executor:
-                    futures = {
-                        executor.submit(scrape_item, r["url"], "wallapop"): r
-                        for r in items_to_enrich
-                    }
-                    enriched = 0
-                    dead_not_found = 0
-                    dead_sold = 0
-                    no_price_count = 0
-                    for future in _ac(futures, timeout=15):
-                        item = futures[future]
-                        try:
-                            scraped = future.result(timeout=10)
-                            if scraped and scraped.get("dead"):
-                                dead_urls.add(item.get("url", ""))
-                                if scraped.get("dead_reason") == "not_found":
-                                    dead_not_found += 1
-                                    print(f"[ENRICH] 🚫 Not found (404): {item['url'][:60]}")
-                                else:
-                                    dead_sold += 1
-                                    print(f"[ENRICH] 🚫 Sold/reserved: {item['url'][:60]}")
-                            elif scraped and scraped.get("price"):
-                                item["price"] = scraped["price"]
-                                item["title"] = scraped.get("title") or item["title"]
-                                item["images"] = scraped.get("images", [])
-                                item["item_id"] = scraped.get("item_id", "")
-                                item["description"] = scraped.get("description", "")
-                                item["condition"] = scraped.get("condition", "")
-                                enriched += 1
-                                print(f"[ENRICH] ✅ {str(item['title'])[:40]} → €{item['price']}")
+                if time.time() > deadline:
+                    print(f"[DISCOVERY] Timeout reached before enrich — skipping enrichment")
+                    items_to_enrich = []
+                else:
+                    print(f"[ENRICH] Scraping {len(items_to_enrich)} Wallapop pages for price data")
+            if items_to_enrich:
+                items_to_enrich = items_to_enrich[:6]
+                print(f"[ENRICH] Enriching {len(items_to_enrich)} URLs (capped at 6)")
+                enriched = 0
+                dead_not_found = 0
+                dead_sold = 0
+                no_price_count = 0
+                for item in items_to_enrich:
+                    try:
+                        scraped = scrape_item(item["url"], "wallapop")
+                        if scraped and scraped.get("dead"):
+                            dead_urls.add(item.get("url", ""))
+                            if scraped.get("dead_reason") == "not_found":
+                                dead_not_found += 1
+                                print(f"[ENRICH] 🚫 Not found (404): {item['url'][:60]}")
                             else:
-                                no_price_count += 1
-                                print(f"[ENRICH] ⚠️ No price for: {item['url'][:60]}")
-                        except Exception as e:
-                            print(f"[ENRICH] ❌ Failed: {item['url'][:60]} — {e}")
+                                dead_sold += 1
+                                print(f"[ENRICH] 🚫 Sold/reserved: {item['url'][:60]}")
+                        elif scraped and scraped.get("price"):
+                            item["price"] = scraped["price"]
+                            item["title"] = scraped.get("title") or item["title"]
+                            item["images"] = scraped.get("images", [])
+                            item["item_id"] = scraped.get("item_id", "")
+                            item["description"] = scraped.get("description", "")
+                            item["condition"] = scraped.get("condition", "")
+                            enriched += 1
+                            print(f"[ENRICH] ✅ {str(item['title'])[:40]} → €{item['price']}")
+                        else:
+                            no_price_count += 1
+                            print(f"[ENRICH] ⚠️ No price for: {item['url'][:60]}")
+                    except Exception as e:
+                        print(f"[ENRICH] ❌ Failed: {item['url'][:60]} — {e}")
+                    time.sleep(0.3)
                 if dead_urls:
                     all_results = [r for r in all_results if r.get("url", "") not in dead_urls]
                 print(f"[ENRICH] Summary: {enriched} live, {dead_not_found + dead_sold} dead ({dead_sold} sold/reserved, {dead_not_found} not found), {no_price_count} no-price")
@@ -1189,23 +1216,21 @@ def discover_listings():
                 return platform, [], str(e)
 
         # ANCHOR:platform_parallel
-        # Run all platform searches in parallel
+        # Run platform searches sequentially
         tagged_urls = []  # list of (url, platform)
-        with ThreadPoolExecutor(max_workers=max(len(ddg_platforms), 1)) as ex:
-            futures = {ex.submit(_ddg_collect, p): p for p in ddg_platforms}
-            for future in as_completed(futures):
-                plat, urls, err = future.result()
-                if err:
-                    platform_errors.append(f"{plat}: {err}")
-                    print(f"DEBUG: Platform {plat} failed: {err}")
-                else:
-                    for url in urls:
-                        tagged_urls.append((url, plat))
-                    print(f"DEBUG: Platform {plat}: {len(urls)} URLs")
-                    print(f"[DDG] Platform: {plat}")
-                    print(f"[DDG] Raw URLs collected ({len(urls)}):")
-                    for u in urls:
-                        print(f"  [DDG URL] {u}")
+        for p in ddg_platforms:
+            plat, urls, err = _ddg_collect(p)
+            if err:
+                platform_errors.append(f"{plat}: {err}")
+                print(f"DEBUG: Platform {plat} failed: {err}")
+            else:
+                for url in urls:
+                    tagged_urls.append((url, plat))
+                print(f"DEBUG: Platform {plat}: {len(urls)} URLs")
+                print(f"[DDG] Platform: {plat}")
+                print(f"[DDG] Raw URLs collected ({len(urls)}):")
+                for u in urls:
+                    print(f"  [DDG URL] {u}")
 
         # ANCHOR:url_dedup
         # Step 3: Deduplicate by normalized URL (lowercase, strip trailing slash + query params)
@@ -1230,14 +1255,18 @@ def discover_listings():
             return jsonify({"results": [], "platform_errors": platform_errors, "platform_counts": {}})
 
         # ANCHOR:scrape_step4
-        # Step 4: Scrape each URL in parallel (scrape_item defined at module level)
+        # Step 4: Scrape each URL sequentially
+        if time.time() > deadline:
+            print(f"[DISCOVERY] Timeout reached before scrape — returning partial results: {len(direct_results)} items")
+            return jsonify({"results": direct_results, "platform_errors": platform_errors, "platform_counts": {}, "timed_out": True})
         listings = []
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            future_to_pair = {executor.submit(scrape_item, url, plat): (url, plat) for url, plat in deduped}
-            for future in as_completed(future_to_pair):
-                result = future.result()
+        for url, plat in deduped:
+            try:
+                result = scrape_item(url, plat)
                 if result:
                     listings.append(result)
+            except Exception as e:
+                print(f"[SCRAPE] Failed {url[:60]}: {e}")
 
         # ANCHOR:direct_api_merge
         # Merge direct API results (Vinted, eBay RSS) — bypass scraping
